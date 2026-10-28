@@ -3,10 +3,18 @@ import { z } from "zod";
 const modelSelection = z.strictObject({ providerId: z.string().min(1).max(96), modelId: z.string().min(1).max(256) });
 export const originalConfigSchema = z.strictObject({
   language: modelSelection, image: modelSelection, video: modelSelection,
+  productionMode: z.enum(["short", "long"]).default("short"),
   brief: z.string().trim().min(1).max(50000),
   style: z.string().trim().max(1000),
   characterCount: z.number().int().min(1).max(20),
-  shotCount: z.number().int().min(1).max(60),
+  shotCount: z.number().int().min(1).max(240),
+  targetDurationMinutes: z.number().int().min(1).max(60).default(10),
+  sceneCount: z.number().int().min(1).max(60).default(8),
+  maxRetries: z.number().int().min(0).max(5).default(0),
+  costLimit: z.number().finite().min(0).max(100000).default(0),
+  costPerVideo: z.number().finite().positive().max(10000).default(2.01),
+  faceQaEnabled: z.boolean().default(false),
+  faceThreshold: z.number().finite().min(-1).max(1).default(0.363),
   ratio: z.enum(["16:9", "9:16", "1:1"]),
   duration: z.number().int().positive().max(60),
   resolution: z.string().min(1).max(64),
@@ -34,23 +42,32 @@ export const originalPlanSchema = z.strictObject({
     endState: z.string().trim().min(1).max(6000).optional(),
     continuity: z.string().trim().min(1).max(6000).optional(),
     imagePrompt: z.string().trim().min(1).max(8000), videoPrompt: z.string().trim().min(1).max(8000),
-  })).min(1).max(60),
+  })).min(1).max(240),
 });
 
 const generatedFile = z.strictObject({ path: z.string().min(1).max(2048), mimeType: z.string().min(1).max(128), mediaType: z.enum(["image", "video", "audio"]), taskId: z.string().min(1).max(512).optional() });
 const taskSchema = z.strictObject({
-  id: z.string().min(1).max(128), kind: z.enum(["plan", "asset", "image", "video", "export"]), label: z.string(),
+  id: z.string().min(1).max(128), kind: z.enum(["plan", "bible", "scenePlan", "asset", "image", "video", "qa", "export"]), label: z.string(),
   status: z.enum(["pending", "running", "completed", "failed"]), prompt: z.string().optional(),
   references: z.array(z.string()).optional(), referenceFrame: z.string().max(2048).optional(), files: z.array(generatedFile).optional(), error: z.string().optional(),
+  sceneId: identifier.optional(), attempts: z.number().int().nonnegative().optional(),
+  qa: z.strictObject({
+    passed: z.boolean(), sampledFrames: z.number().int().nonnegative(), detectedFrames: z.number().int().nonnegative(),
+    unknownFaces: z.number().int().nonnegative(), duplicateFrames: z.number().int().nonnegative(),
+    characterCoverage: z.record(identifier, z.number().finite().min(0).max(1)),
+    averageScores: z.record(identifier, z.number().finite().min(-1).max(1)), reasons: z.array(z.string()),
+  }).optional(),
 });
 export const originalRunSchema = z.strictObject({
   version: z.literal(1), id: z.uuid(),
   status: z.enum(["running", "pausing", "paused", "failed", "completed", "interrupted"]),
   config: originalConfigSchema,
   createdAt: z.number(), updatedAt: z.number(),
-  plan: originalPlanSchema.optional(), tasks: z.array(taskSchema).max(220),
+  plan: originalPlanSchema.optional(), tasks: z.array(taskSchema).max(1000),
+  longBible: z.unknown().optional(), scenePlans: z.record(identifier, z.unknown()).optional(),
   canvases: z.record(z.string(), z.string()), error: z.string().optional(),
   usage: z.object({ input: z.number(), output: z.number(), totalTokens: z.number() }).optional(),
+  estimatedCost: z.number().finite().nonnegative().optional(),
 });
 
 export type OriginalConfig = z.infer<typeof originalConfigSchema>;

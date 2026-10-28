@@ -8,6 +8,9 @@ import { generateMedia, listMediaModels } from "@/utils/media/generation";
 import { getMediaProvider, loadMediaProviderSource } from "@/utils/media/provider";
 import { createWorkspaceFfmpeg, prepareWorkspaceFfmpeg } from "@/utils/ffmpeg";
 import { lockWorkspaceFiles, resolveWorkspacePath, writeWorkspaceFile } from "@/utils/workspace/files";
+import { inspectVideoFaces, prepareFaceQa } from "./faceQa";
+import { buildLongBiblePrompt, buildLongMediaTasks, buildLongScenePrompt, composeLongPlan, validateLongBible, validateLongScene } from "./longProduction";
+import { longBibleSchema, longScenePlanSchema, type LongScenePlan } from "./longTypes";
 import { originalPlanSchema, originalRunSchema, type OriginalConfig, type OriginalPlan, type OriginalRun, type OriginalTask } from "./types";
 
 type Control = { state: OriginalRun; pause: boolean; saving: Promise<void> };
@@ -70,6 +73,13 @@ function videoMode(model: MediaModel): MediaGenerationRequest["mode"] {
 async function preflight(config: OriginalConfig) {
   const language = getConfiguredModel(config.language.providerId, config.language.modelId);
   if (!language.provider.apiKey.trim()) fail("请先配置语言模型 API Key");
+  if (config.productionMode === "long") {
+    if (config.shotCount * config.duration !== config.targetDurationMinutes * 60) fail("长片镜头数与目标分钟数不一致");
+    if (config.sceneCount > config.shotCount) fail("长片场景数不能超过镜头数");
+    if (Math.ceil(config.shotCount / config.sceneCount) > 12) fail("每场最多 12 镜，请增加长片场景数");
+    if (config.costLimit > 0 && config.shotCount * config.costPerVideo > config.costLimit) fail(`预算上限不足：首轮视频预计 ${Number((config.shotCount * config.costPerVideo).toFixed(2))} USD`);
+    if (config.faceQaEnabled) await prepareFaceQa();
+  }
   const models = await listMediaModels();
   const image = models.find(model => model.type === "image" && model.providerId === config.image.providerId && model.modelId === config.image.modelId);
   const video = models.find(model => model.type === "video" && model.providerId === config.video.providerId && model.modelId === config.video.modelId);
@@ -155,6 +165,90 @@ async function planStory(cwd: string, state: OriginalRun) {
     ...plan.shots.map<OriginalTask>((shot, index) => ({ id: `video:${shot.id}`, kind: "video", label: `镜头视频：${shot.title}`, status: "pending", prompt: `${shot.videoPrompt}\n动作：${shot.action}\n对白：${shot.dialogue || "无对白"}\n开始状态：${shot.startState || "按分镜图开始"}\n结束状态：${shot.endState || "按完整剧本结束"}\n与上一镜衔接：${shot.continuity || (index === 0 ? "全片开场" : "无缝承接上一镜最后一帧")}${style}${characterIdentity}${adultVisual}\n${config.continuousShots && index > 0 ? "以所附上一镜最后一帧为本镜第一帧，直接延续其中全部人物、姿势、空间、物件和光线，不得重新开场或重置人物。" : "以所附分镜图为画面依据，保持人物身份、服装与场景连续。"}`, references: [`image:${shot.id}`] })),
     ...(config.stitch ? [{ id: "export", kind: "export" as const, label: "合成完整视频", status: "pending" as const }] : []),
   );
+}
+
+async function languageResponse(state: OriginalRun, prompt: string) {
+  const configured = getConfiguredModel(state.config.language.providerId, state.config.language.modelId);
+  const stream = streamAi(configured, { messages: [{ role: "user", content: prompt, timestamp: Date.now() }] }, AbortSignal.timeout(10 * 60 * 1000));
+  for await (const _event of stream) { /* 消费流后读取最终结构，不持久化推理内容。 */ }
+  const message = await stream.result();
+  if (message.stopReason !== "stop") throw new Error(message.errorMessage || `剧本请求未正常结束：${message.stopReason}`);
+  const usage = state.usage ?? { input: 0, output: 0, totalTokens: 0 };
+  state.usage = { input: usage.input + message.usage.input, output: usage.output + message.usage.output, totalTokens: usage.totalTokens + message.usage.totalTokens };
+  return message.content.filter(part => part.type === "text").map(part => part.text).join("");
+}
+
+function parseJsonResponse(text: string) {
+  return JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
+}
+
+async function planLongBible(cwd: string, state: OriginalRun, task: OriginalTask) {
+  const prompt = buildLongBiblePrompt(state.config);
+  task.prompt = prompt;
+  await write(cwd, `${runDirectory(state)}/longBiblePrompt.txt`, prompt);
+  const text = await languageResponse(state, prompt);
+  await write(cwd, `${runDirectory(state)}/longBibleResponse.txt`, text);
+  const bible = longBibleSchema.parse(parseJsonResponse(text));
+  validateLongBible(bible, state.config);
+  state.longBible = bible;
+  state.scenePlans = {};
+  await write(cwd, `${runDirectory(state)}/longBible.json`, JSON.stringify(bible, null, 2));
+  state.tasks.splice(1, state.tasks.length - 1, ...bible.scenes.map<OriginalTask>(scene => ({
+    id: `scenePlan:${scene.id}`, kind: "scenePlan", label: `展开分场：${scene.title}`, status: "pending", sceneId: scene.id,
+  })));
+}
+
+function parsedLongState(state: OriginalRun) {
+  const bible = longBibleSchema.parse(state.longBible);
+  const scenePlans = Object.fromEntries(Object.entries(state.scenePlans ?? {}).map(([id, value]) => [id, longScenePlanSchema.parse(value)])) as Record<string, LongScenePlan>;
+  return { bible, scenePlans };
+}
+
+async function planLongScene(cwd: string, state: OriginalRun, task: OriginalTask) {
+  const { bible, scenePlans } = parsedLongState(state);
+  const sceneIndex = bible.scenes.findIndex(scene => scene.id === task.sceneId);
+  const scene = bible.scenes[sceneIndex];
+  if (!scene) fail("分场任务引用了不存在的场景");
+  const previous = sceneIndex > 0 ? scenePlans[bible.scenes[sceneIndex - 1]!.id] : undefined;
+  if (sceneIndex > 0 && !previous) fail("上一场尚未完成，不能展开当前分场");
+  const prompt = buildLongScenePrompt(state.config, bible, scene, previous?.shots.at(-1)?.endState);
+  task.prompt = prompt;
+  await write(cwd, `${runDirectory(state)}/scenePrompts/${scene.id}.txt`, prompt);
+  const text = await languageResponse(state, prompt);
+  await write(cwd, `${runDirectory(state)}/sceneResponses/${scene.id}.txt`, text);
+  const plan = longScenePlanSchema.parse(parseJsonResponse(text));
+  plan.shots[0]!.startState = previous?.shots.at(-1)?.endState ?? scene.startState;
+  for (let index = 1; index < plan.shots.length; index++) plan.shots[index]!.startState = plan.shots[index - 1]!.endState;
+  plan.shots.at(-1)!.endState = scene.endState;
+  const usedShotIds = new Set(Object.values(scenePlans).flatMap(item => item.shots.map(shot => shot.id)));
+  validateLongScene(plan, bible, scene, usedShotIds);
+  scenePlans[scene.id] = plan;
+  state.scenePlans = scenePlans;
+  await write(cwd, `${runDirectory(state)}/scenes/${scene.id}.json`, JSON.stringify(plan, null, 2));
+  if (Object.keys(scenePlans).length !== bible.scenes.length) return;
+  const complete = composeLongPlan(bible, scenePlans);
+  validatePlan(complete, state.config);
+  state.plan = complete;
+  await write(cwd, `${runDirectory(state)}/plan.json`, JSON.stringify(complete, null, 2));
+  const planningTasks = 1 + bible.scenes.length;
+  state.tasks.splice(planningTasks, state.tasks.length - planningTasks, ...buildLongMediaTasks(complete, state.config));
+}
+
+async function inspectFaces(cwd: string, state: OriginalRun, task: OriginalTask) {
+  const [videoId, ...assetIds] = task.references ?? [];
+  const videoTask = state.tasks.find(item => item.id === videoId && item.kind === "video") ?? fail("质检任务缺少镜头视频");
+  const video = videoTask.files?.[0] ?? fail("质检任务的镜头视频尚未完成");
+  const videoPath = (await resolveWorkspacePath(cwd, video.path)).path;
+  const references = [];
+  for (const id of assetIds) {
+    const asset = state.tasks.find(item => item.id === id && item.kind === "asset") ?? fail(`质检任务缺少角色资产：${id}`);
+    const file = asset.files?.[0] ?? fail(`角色资产尚未完成：${id}`);
+    references.push({ id: id.slice("asset:".length), path: (await resolveWorkspacePath(cwd, file.path)).path });
+  }
+  const result = await inspectVideoFaces(videoPath, references, state.config.faceThreshold);
+  task.qa = result;
+  await write(cwd, `${runDirectory(state)}/qa/${task.id.slice("qa:".length)}.json`, JSON.stringify(result, null, 2));
+  return { result, videoTask };
 }
 
 async function verifyFiles(cwd: string, files: GeneratedMedia[]) {
@@ -272,7 +366,23 @@ async function execute(cwd: string, control: Control, models: Awaited<ReturnType
       delete task.error;
       await save(cwd, control);
       if (task.kind === "plan") await planStory(cwd, state);
+      else if (task.kind === "bible") await planLongBible(cwd, state, task);
+      else if (task.kind === "scenePlan") await planLongScene(cwd, state, task);
       else if (task.kind === "export") task.files = await mergeVideos(cwd, state);
+      else if (task.kind === "qa") {
+        const { result, videoTask } = await inspectFaces(cwd, state, task);
+        if (!result.passed) {
+          const attempts = videoTask.attempts ?? 1;
+          if (attempts > state.config.maxRetries) fail(`人物一致性质检未通过，已用完 ${state.config.maxRetries} 次重试：${result.reasons.join("；")}`);
+          task.status = "pending";
+          videoTask.status = "pending";
+          delete videoTask.files;
+          delete videoTask.referenceFrame;
+          await save(cwd, control);
+          index = state.tasks.indexOf(videoTask) - 1;
+          continue;
+        }
+      }
       else {
         const config = state.config;
         const model = task.kind === "video" ? models.video : models.image;
@@ -285,6 +395,13 @@ async function execute(cwd: string, control: Control, models: Awaited<ReturnType
           other: Object.fromEntries((model.rules ?? []).map(rule => [rule.field, rule.value])),
         };
         if (task.kind === "video") {
+          if (config.productionMode === "long") {
+            const nextCost = Number(((state.estimatedCost ?? 0) + config.costPerVideo).toFixed(2));
+            if (config.costLimit > 0 && nextCost > config.costLimit) fail(`已到预算上限 ${config.costLimit} USD，停止提交新的付费视频任务`);
+            state.estimatedCost = nextCost;
+            task.attempts = (task.attempts ?? 0) + 1;
+            await save(cwd, control);
+          }
           request.duration = config.duration;
           request.resolution = config.resolution;
           request.mode = videoMode(model);
@@ -292,8 +409,10 @@ async function execute(cwd: string, control: Control, models: Awaited<ReturnType
           if (config.continuousShots) {
             const videoTasks = state.tasks.filter(item => item.kind === "video");
             const videoIndex = videoTasks.indexOf(task);
-            if (videoIndex > 0) {
-              const previous = videoTasks[videoIndex - 1]!.files?.[0] ?? fail("上一镜视频尚未完成，无法建立连续首帧");
+            const previousTask = videoIndex > 0 ? videoTasks[videoIndex - 1] : undefined;
+            const canContinue = previousTask && (config.productionMode === "short" || previousTask.sceneId === task.sceneId);
+            if (canContinue) {
+              const previous = previousTask.files?.[0] ?? fail("上一镜视频尚未完成，无法建立连续首帧");
               referenceMedia = await extractLastFrame(cwd, state, previous, task.id.slice("video:".length));
             }
           }
@@ -341,7 +460,10 @@ export async function start(cwd: string, id: string, config: OriginalConfig, pre
     const project = await readJson(cwd, "originalProject.json");
     if (project?.yaohaoOriginal !== true || project.version !== 1 || !["original", "adaptation"].includes(project.mode)) fail("当前工作区不是受支持的原创项目");
     const models = await preflight(config);
-    const state: OriginalRun = { version: 1, id, status: "running", config, createdAt: Date.now(), updatedAt: Date.now(), tasks: [{ id: "plan", kind: "plan", label: "完整剧本、唯一角色表与导演分镜", status: "pending" }], canvases: {} };
+    const initialTask: OriginalTask = config.productionMode === "long"
+      ? { id: "bible", kind: "bible", label: "全片圣经、唯一角色库与分场规划", status: "pending" }
+      : { id: "plan", kind: "plan", label: "完整剧本、唯一角色表与导演分镜", status: "pending" };
+    const state: OriginalRun = { version: 1, id, status: "running", config, createdAt: Date.now(), updatedAt: Date.now(), tasks: [initialTask], canvases: {}, ...(config.productionMode === "long" ? { scenePlans: {}, estimatedCost: 0 } : {}) };
     const control: Control = { state, pause: false, saving: Promise.resolve() };
     await mkdir((await resolveWorkspacePath(cwd, "originalRuns", true)).path, { recursive: true });
     try { await mkdir((await resolveWorkspacePath(cwd, runDirectory(state), true)).path); }
