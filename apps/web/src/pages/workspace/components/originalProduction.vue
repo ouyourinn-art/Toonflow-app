@@ -7,6 +7,10 @@
       <p class="workflowDescription">完整剧本 → 唯一角色与场景资产 → 分镜图 → 镜头视频 → 合成成片。启动后自动推进，关闭面板不停止后台制作。</p>
       <div v-if="statusError" class="errorBox" role="alert">{{ statusError }}<el-button text @click="refreshStatus">重新读取进度</el-button></div>
       <template v-if="editing">
+        <div class="presetBar">
+          <div><strong>成人露骨 90 秒连续成片</strong><span>6 镜 × 15 秒，固定人物，上一镜尾帧接下一镜首帧，自动合成。</span></div>
+          <el-button type="danger" size="large" :disabled="busy || !statusReady" @click="applyAdult90Preset">套用 90 秒预设</el-button>
+        </div>
         <el-form labelPosition="top" :disabled="busy || !statusReady">
           <el-form-item label="创作需求 / 小说原文">
             <el-input v-model="form.brief" type="textarea" :rows="4" :maxlength="50000" placeholder="填写故事、人物关系、剧情与结局；小说改编可粘贴原文。" />
@@ -30,6 +34,9 @@
             </el-form-item>
             <el-form-item label="固定角色数"><el-input-number v-model="form.characterCount" :min="1" :max="20" :precision="0" /></el-form-item>
             <el-form-item label="镜头数"><el-input-number v-model="form.shotCount" :min="1" :max="60" :precision="0" /></el-form-item>
+            <el-form-item label="露骨成人模式"><el-switch v-model="form.adultExplicit" activeText="生图、视频和分镜均使用明确成人表达" /></el-form-item>
+            <el-form-item label="人物身份锁定"><el-switch v-model="form.characterLock" activeText="固定脸型、发型、体型与标志特征" /></el-form-item>
+            <el-form-item label="全片连续模式"><el-switch v-model="form.continuousShots" activeText="上一镜尾帧作为下一镜首帧" /></el-form-item>
             <el-form-item label="画幅">
               <el-select v-model="form.ratio"><el-option v-for="ratio in ratios" :key="ratio" :value="ratio" :label="ratio" /></el-select>
             </el-form-item>
@@ -42,13 +49,14 @@
             <el-form-item label="最终合成"><el-switch v-model="form.stitch" activeText="按镜头顺序自动合成 MP4" /></el-form-item>
           </div>
         </el-form>
+        <p v-if="form.adultExplicit" class="adultNotice">成人模式仅构建 25 岁以上、原创虚构、清醒且自愿的角色。系统会发送无遮挡的明确提示词；最终画面仍可能被所选上游模型自行弱化。</p>
         <div class="modelHelp">
           <span>语言、图片与视频分别调用所选供应商；语言 Key 不会自动用于媒体服务。</span>
           <el-button text :loading="loadingModels" @click="loadModels">刷新模型列表</el-button>
           <el-button text @click="openSettings">配置模型</el-button>
         </div>
         <p v-if="modelError || validationError" class="errorText" role="alert">{{ modelError || validationError }}</p>
-        <p class="costNotice">预计 {{ form.shotCount * form.duration }} 秒；图片至少 {{ form.characterCount + 1 + form.shotCount }} 张，另加额外场景图；视频 {{ form.shotCount }} 段。生成按供应商规则计费，启动前会校验模型、Key 与合成工具。</p>
+        <p class="costNotice">预计 {{ form.shotCount * form.duration }} 秒{{ form.stitch ? '，合成后按目标时长精确裁切' : '' }}；图片至少 {{ form.characterCount + 1 + form.shotCount }} 张，另加额外场景图；视频 {{ form.shotCount }} 段。生成按供应商规则计费，启动前会校验模型、Key 与合成工具。</p>
         <div class="actions">
           <el-button v-if="newVersion" :disabled="busy" @click="newVersion = false">返回当前进度</el-button>
           <el-button type="primary" size="large" :loading="busy" :disabled="!canStart" @click="startProduction">{{ run ? '新建一版并开始制作' : '开始一键制作' }}</el-button>
@@ -57,7 +65,7 @@
       <template v-else-if="run">
         <div class="progressHeading"><strong>{{ run.plan?.title || '正在编写完整剧本' }}</strong><span>{{ statusLabels[run.status] }} · {{ completedCount }}/{{ run.tasks.length }} 步</span></div>
         <el-progress :percentage="progress" :status="run.status === 'completed' ? 'success' : run.status === 'failed' ? 'exception' : undefined" />
-        <p class="runSummary">{{ run.config.characterCount }} 个角色 · {{ run.config.shotCount }} 个镜头 · {{ run.config.ratio }} · 每镜 {{ run.config.duration }} 秒 · 语言模型 {{ run.config.language.modelId }}</p>
+        <p class="runSummary">{{ run.config.characterCount }} 个角色 · {{ run.config.shotCount }} 个镜头 · {{ run.config.ratio }} · 每镜 {{ run.config.duration }} 秒 · {{ run.config.characterLock ? '人物锁定' : '普通身份一致' }} · {{ run.config.continuousShots ? '尾帧连续' : '独立首帧' }} · {{ run.config.adultExplicit ? '露骨成人' : '常规内容' }} · 语言模型 {{ run.config.language.modelId }}</p>
         <p v-if="run.status === 'pausing'" class="runSummary">当前请求完成并保存后暂停。</p>
         <div v-if="run.error" class="errorBox" role="alert">{{ run.error }}</div>
         <div class="actions">
@@ -72,6 +80,7 @@
             <summary><span :class="['taskStatus', task.status]">{{ taskLabels[task.status] }}</span><span>{{ task.label }}</span></summary>
             <p v-if="task.error" class="errorText">{{ task.error }}</p>
             <p v-if="task.references?.length" class="runSummary">参考资产：{{ task.references.join('、') }}</p>
+            <p v-if="task.referenceFrame" class="runSummary">实际视频首帧：{{ task.referenceFrame }}</p>
             <pre v-if="task.prompt" class="promptText">{{ task.prompt }}</pre>
             <div v-for="file in task.files" :key="file.path" class="resultFile">{{ file.path }}</div>
           </details>
@@ -106,7 +115,8 @@ const models = shallowRef<MediaModel[]>([]);
 const languageValue = ref("");
 const imageValue = ref("");
 const videoValue = ref("");
-const form = reactive({ brief: props.brief, style: "电影写实", characterCount: 3, shotCount: 6, ratio: "16:9" as OriginalConfig["ratio"], duration: 15, resolution: "", stitch: true });
+type ProductionForm = Omit<OriginalConfig, "language" | "image" | "video">;
+const form = reactive<ProductionForm>({ brief: props.brief, style: "电影写实", characterCount: 3, shotCount: 6, ratio: "16:9", duration: 15, resolution: "", stitch: true, adultExplicit: false, characterLock: true, continuousShots: true });
 const statusLabels = { running: "进行中", pausing: "等待暂停", paused: "已暂停", failed: "执行失败", completed: "已完成", interrupted: "服务中断，待恢复" };
 const taskLabels = { pending: "待执行", running: "进行中", completed: "已完成", failed: "失败" };
 const headers = { "x-toonflow-workspace": "1" };
@@ -192,6 +202,23 @@ function selection(value: string) {
   return { providerId, modelId };
 }
 
+function applyAdult90Preset() {
+  Object.assign(form, {
+    style: "成熟二次元成人动画，电影级柔光，稳定一致的角色设计，连贯空间与镜头语言",
+    characterCount: 3, shotCount: 6, ratio: "16:9", duration: 15, stitch: true,
+    adultExplicit: true, characterLock: true, continuousShots: true,
+  } satisfies Partial<ProductionForm>);
+  const video = videoModels.value.find(model => model.modelId.trim().toLowerCase() === "seedance-2.0-white")
+    ?? videoModels.value.find(model => /(?:^|\s)seedance[-_. ]?2\.0(?:[-_. ]?white)?(?:\s|$)/i.test(`${model.modelId} ${model.label}`));
+  if (video) {
+    videoValue.value = modelValue(video);
+    const choices = video.durationResolutionMap?.filter(item => item.duration.includes(15)).flatMap(item => item.resolution) ?? [];
+    form.resolution = choices.includes("480p") ? "480p" : choices[0] ?? "";
+  }
+  const image = imageModels.value.find(model => /gpt[-_. ]?image[-_. ]?2\.5/i.test(`${model.modelId} ${model.label}`));
+  if (image) imageValue.value = modelValue(image);
+}
+
 async function startProduction() {
   if (!canStart.value) return;
   busy.value = true;
@@ -262,6 +289,8 @@ onScopeDispose(() => { lifetime.abort(); clearTimeout(pollTimer); });
 .originalProduction {
   max-height: 72vh; overflow-y: auto; padding: 0 6px 4px;
   .workflowDescription, .costNotice, .runSummary { color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.7; margin: 8px 0 14px; }
+  .presetBar { display: flex; justify-content: space-between; align-items: center; gap: 18px; margin: 12px 0 18px; padding: 16px; border: 1px solid var(--el-color-danger-light-5); border-radius: 10px; background: var(--el-color-danger-light-9); div { display: flex; flex-direction: column; gap: 5px; } span { color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; } }
+  .adultNotice { color: var(--el-color-danger); background: var(--el-color-danger-light-9); border-radius: 8px; padding: 10px 12px; font-size: 12px; line-height: 1.7; }
   .configGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
   .modelHelp, .actions, .progressHeading { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
   .modelHelp { font-size: 12px; color: var(--el-text-color-secondary); }
@@ -278,6 +307,6 @@ onScopeDispose(() => { lifetime.abort(); clearTimeout(pollTimer); });
     .promptText { font: inherit; font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--el-fill-color-light); padding: 12px; border-radius: 6px; max-height: 300px; overflow-y: auto; }
     .resultFile { font-size: 12px; overflow-wrap: anywhere; margin: 8px 0; }
   }
-  @media (max-width: 640px) { .configGrid { grid-template-columns: 1fr; } }
+  @media (max-width: 640px) { .configGrid { grid-template-columns: 1fr; } .presetBar { align-items: stretch; flex-direction: column; } }
 }
 </style>

@@ -11,6 +11,9 @@ export const originalConfigSchema = z.strictObject({
   duration: z.number().int().positive().max(60),
   resolution: z.string().min(1).max(64),
   stitch: z.boolean(),
+  adultExplicit: z.boolean().default(false),
+  characterLock: z.boolean().default(true),
+  continuousShots: z.boolean().default(false),
 });
 
 const identifier = z.string().regex(/^[a-z][a-zA-Z0-9]{0,63}$/);
@@ -27,6 +30,9 @@ export const originalPlanSchema = z.strictObject({
     id: identifier, title: z.string().trim().min(1).max(200), sceneId: identifier,
     characterIds: z.array(identifier).max(20),
     action: z.string().trim().min(1).max(6000), dialogue: z.string().max(6000),
+    startState: z.string().trim().min(1).max(6000).optional(),
+    endState: z.string().trim().min(1).max(6000).optional(),
+    continuity: z.string().trim().min(1).max(6000).optional(),
     imagePrompt: z.string().trim().min(1).max(8000), videoPrompt: z.string().trim().min(1).max(8000),
   })).min(1).max(60),
 });
@@ -35,7 +41,7 @@ const generatedFile = z.strictObject({ path: z.string().min(1).max(2048), mimeTy
 const taskSchema = z.strictObject({
   id: z.string().min(1).max(128), kind: z.enum(["plan", "asset", "image", "video", "export"]), label: z.string(),
   status: z.enum(["pending", "running", "completed", "failed"]), prompt: z.string().optional(),
-  references: z.array(z.string()).optional(), files: z.array(generatedFile).optional(), error: z.string().optional(),
+  references: z.array(z.string()).optional(), referenceFrame: z.string().max(2048).optional(), files: z.array(generatedFile).optional(), error: z.string().optional(),
 });
 export const originalRunSchema = z.strictObject({
   version: z.literal(1), id: z.uuid(),
