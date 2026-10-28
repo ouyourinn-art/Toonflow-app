@@ -43,7 +43,6 @@ import {
   IconPalette,
   IconSettings,
   IconPhotoVideo,
-  IconBuildingStore,
   IconInfoCircle,
   IconCode,
   IconShieldLock,
@@ -55,6 +54,7 @@ import {
 } from "@tabler/icons-vue";
 
 const settingsPanels = [
+  { id: "shugando", label: "Shugando 服务", icon: IconNetwork, component: defineAsyncComponent(() => import("./panels/shugando.vue")) },
   { id: "ui", label: "界面设置", icon: IconPalette, component: defineAsyncComponent(() => import("./panels/ui.vue")) },
   { id: "general", label: "常规配置", icon: IconSettings, component: defineAsyncComponent(() => import("./panels/general/index.vue")) },
   {
@@ -65,13 +65,6 @@ const settingsPanels = [
     component: defineAsyncComponent(() => import("./panels/languageModel/index.vue")),
   },
   { id: "mediaModel", label: "媒体模型", icon: IconPhotoVideo, component: defineAsyncComponent(() => import("./panels/mediaModel/index.vue")) },
-  {
-    id: "pluginMarket",
-    label: "插件市场",
-    icon: IconBuildingStore,
-    groupLabel: "市场",
-    component: defineAsyncComponent(() => import("./panels/pluginMarket/index.vue")),
-  },
   { id: "mcp", label: "MCP", icon: IconPlugConnected, groupLabel: "通讯", component: defineAsyncComponent(() => import("./panels/mcp/index.vue")) },
   { id: "network", label: "网络设置", icon: IconNetwork, component: defineAsyncComponent(() => import("./panels/network.vue")) },
   ...(!isMobile

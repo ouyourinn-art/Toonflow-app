@@ -4,8 +4,8 @@
     <aside id="homeSidebar" class="homeSidebar" aria-label="首页侧栏">
       <div class="sidebarHeader">
         <div class="sidebarBrand">
-          <el-image class="sidebarLogo" :src="logoUrl" fit="contain" alt="Toonflow" />
-          <span class="brandName">Toonflow</span>
+          <el-image class="sidebarLogo" :src="logoUrl" fit="contain" alt="耀好" />
+          <span class="brandName">耀好原创</span>
         </div>
         <button class="sidebarToggle" type="button" :aria-label="sidebarCollapsed ? '展开侧栏' : '收起侧栏'" :title="sidebarCollapsed ? '展开侧栏' : '收起侧栏'" :aria-expanded="!sidebarCollapsed" aria-controls="homeSidebar" @click="sidebarCollapsed = !sidebarCollapsed">
           <icon-layout-sidebar-left-expand v-if="sidebarCollapsed" :size="18" aria-hidden="true" />
@@ -38,7 +38,7 @@
           </span>
           <span class="sidebarText">设置</span>
         </button>
-        <a class="sidebarItem githubLink" href="https://github.com/HBAI-Ltd/Toonflow-app" target="_blank" rel="noopener noreferrer" aria-label="GitHub" title="GitHub">
+        <a class="sidebarItem githubLink" href="https://github.com/ouyourinn-art/Toonflow-app/tree/yaohao" target="_blank" rel="noopener noreferrer" aria-label="GitHub" title="GitHub">
           <icon-brand-github :size="18" aria-hidden="true" />
           <span class="sidebarText">GitHub</span>
         </a>
@@ -49,8 +49,15 @@
         <el-main class="pageContent">
           <section class="creationPanel" data-home-section="home" aria-label="创建项目">
             <div class="brand">
-              <el-image class="brandLogo" :src="logoUrl" fit="contain" alt="Toonflow" />
-              <h1>今天要做点什么？</h1>
+              <el-image class="brandLogo" :src="logoUrl" fit="contain" alt="耀好" />
+              <h1>让故事，从这里成片。</h1>
+            </div>
+            <p class="studioSubtitle">耀好原创工作室 · 从完整剧本出发，统一人物与镜头</p>
+            <div class="creationModes" aria-label="创作模式">
+              <button v-for="mode in originalModes" :key="mode.id" class="modeCard" :class="{ selected: creationMode === mode.id }" type="button" :aria-pressed="creationMode === mode.id" @click="creationMode = mode.id">
+                <strong>{{ mode.label }}</strong><span>{{ mode.description }}</span>
+              </button>
+              <button class="modeCard" type="button" @click="scrollToSection('projects')"><strong>继续项目</strong><span>打开已保存的剧本、画布和素材。</span></button>
             </div>
             <div class="promptArea">
               <el-card class="promptCard" :class="{ draggingAttachments }" shadow="never" @dragenter.capture="dragEnterAttachments" @dragover.capture="dragOverAttachments" @dragleave.capture="dragLeaveAttachments" @drop.capture="dropAttachments">
@@ -111,7 +118,6 @@
               </el-card>
             </div>
           </section>
-          <div data-home-section="explore"><explore :scrollElement="pageScroll?.wrapRef" /></div>
         </el-main>
       </div>
     </el-scrollbar>
@@ -131,7 +137,7 @@ import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox, type InputInstance, type ScrollbarInstance } from "element-plus";
 import { getReadableFileMimeType, readableFileAccept } from "@toonflow/server/documentFormats";
 import {
-  IconQrcode, IconDeviceDesktop, IconHome, IconCompass,
+  IconQrcode, IconDeviceDesktop, IconHome,
   IconArrowUp, IconPlus, IconLoader2,
   IconFolder, IconEdit, IconFileZip,
   IconTrash, IconPaperclip,
@@ -140,7 +146,8 @@ import modelPopover from "@/components/modelPopover.vue";
 import attachmentList from "@/components/agent/attachmentList.vue";
 import { createPastedTextFile, readTextAttachment } from "@/components/agent/textAttachments";
 import type { AgentAttachment } from "@/components/agent/types";
-import logoUrl from "@toonflow/assets/logo.svg";
+import logoUrl from "@toonflow/assets/yaohaoLogo.svg";
+import { createOriginalProject, originalAgentPrompt, originalModes, type OriginalMode } from "@/lib/originalWorkflow";
 import { useWorkspaceStore, type Project } from "@/stores/workspace";
 import { hasDesktopUpdate } from "@/stores/desktopUpdate";
 import { deviceHubEnabled, mobileConnection, mobileConnectionLabel } from "@/lib/mobile";
@@ -150,7 +157,6 @@ import { waitForControlValue } from "@/lib/mcpControl";
 import settings from "@/components/settings/index.vue";
 import assetLibraryDialog from "./assetLibraryDialog.vue";
 import bg from "./bg.vue";
-import explore from "./explore.vue";
 import projectCover from "./projectCover.vue";
 import workspacePicker from "./workspacePicker.vue";
 
@@ -164,7 +170,6 @@ const activeSection = ref("home");
 const homeSections = [
   { id: "home", label: "首页", icon: IconHome },
   { id: "projects", label: "项目", icon: IconFolder },
-  { id: "explore", label: "探索", icon: IconCompass },
 ];
 const mobileConnect = defineAsyncComponent(() => import("@/components/mobileConnect.vue"));
 const router = useRouter();
@@ -175,6 +180,7 @@ const exportingDirectory = ref("");
 const promptWorkspacePicker = ref<InstanceType<typeof workspacePicker>>();
 const relocationPicker = ref<InstanceType<typeof workspacePicker>>();
 const prompt = ref("");
+const creationMode = ref<OriginalMode>("original");
 const promptInput = ref<InputInstance>();
 const promptAttachments = ref<AgentAttachment[]>([]);
 const attachmentInput = ref<HTMLInputElement>();
@@ -275,7 +281,7 @@ function updateActiveSection() {
   if (!wrap) return;
   backgroundScrollTop.value = wrap.scrollTop;
   if (wrap.scrollTop > 0 && wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 2) {
-    activeSection.value = "explore";
+    activeSection.value = "projects";
     return;
   }
   const top = wrap.getBoundingClientRect().top + 120;
@@ -455,16 +461,19 @@ async function renameProject(project: Project) {
 
 async function createProject(fromPrompt = true) {
   if (creating.value || opening.value || (fromPrompt && !workspaceDirectory.value)) return;
+  if (fromPrompt && promptAttachments.value.length && !selectedModel.value) return ElMessage.warning("请先选择语言模型再提交附件；文字需求可直接保存为草稿。");
   const path = fromPrompt ? workspaceDirectory.value : await relocationPicker.value?.chooseDirectory();
   if (!path || creating.value || opening.value || pageLifetime.signal.aborted) return;
   creating.value = true;
   try {
     const { directory, empty } = await useWorkspaceFiles(path).list();
     if (fromPrompt && !empty) return ElMessage.warning("该文件夹不为空，请重新选择空文件夹；已有项目请使用“新建项目”入口或点击项目列表打开。");
-    if (empty) await useWorkspaceFiles(directory).writeJson("画布1.json", { toonflowCanvas: true, nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }, true);
+    if (empty) await createOriginalProject(directory, creationMode.value, prompt.value);
     await workspaceStore.openProject(directory);
-    if (fromPrompt && (prompt.value.trim() || promptAttachments.value.length)) {
-      workspaceStore.pendingAgentMessage = { directory: workspaceStore.project!.directory, prompt: prompt.value, attachments: [...promptAttachments.value], model: selectedModel.value, reasoningEffort: reasoningEffort.value };
+    if (fromPrompt && selectedModel.value && (prompt.value.trim() || promptAttachments.value.length)) {
+      workspaceStore.pendingAgentMessage = { directory: workspaceStore.project!.directory, prompt: originalAgentPrompt(creationMode.value, prompt.value), attachments: [...promptAttachments.value], model: selectedModel.value, reasoningEffort: reasoningEffort.value };
+    } else if (fromPrompt && (prompt.value.trim() || promptAttachments.value.length)) {
+      ElMessage.info("创作需求已保存到故事构思画布；配置并选择语言模型后，可在助手中继续创作。");
     }
     await enterWorkspace();
   } catch (err) {
@@ -479,6 +488,24 @@ async function createProject(fromPrompt = true) {
 
 <style lang="scss" scoped>
 .home {
+  .studioSubtitle { text-align: center; color: var(--el-text-color-secondary); margin: -8px 0 24px; }
+  .creationModes {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    width: min(820px, 100%);
+    margin: 0 auto 24px;
+    .modeCard {
+      display: flex; flex-direction: column; gap: 10px; padding: 20px; text-align: start;
+      color: var(--el-text-color-primary); background: var(--el-bg-color-overlay);
+      border: 1px solid var(--el-border-color); border-radius: var(--ui-radius); cursor: pointer;
+      strong { font-size: 16px; }
+      span { font-size: 12px; line-height: 1.7; color: var(--el-text-color-secondary); }
+      &.selected, &:hover, &:focus-visible { border-color: var(--el-color-primary); outline-color: var(--el-color-primary); }
+      &.selected { background: var(--el-color-primary-light-9); }
+    }
+    @media (max-width: 700px) { grid-template-columns: 1fr; }
+  }
   --sidebarWidth: 240px;
   --sidebarMotion: 220ms;
   --sidebarFade: 140ms;
@@ -565,7 +592,6 @@ async function createProject(fromPrompt = true) {
           height: 30px;
           transition: opacity var(--sidebarFade) ease;
 
-          .dark & { filter: invert(1); }
         }
 
         .brandName {
@@ -700,9 +726,6 @@ async function createProject(fromPrompt = true) {
               width: clamp(28px, 3.4vw, 44px);
               height: clamp(28px, 3.4vw, 44px);
 
-              .dark & {
-                filter: invert(1);
-              }
             }
 
             h1 {

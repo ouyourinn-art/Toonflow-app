@@ -1,9 +1,9 @@
 <template>
   <div class="about">
     <div class="brand">
-      <div class="brandMark"><img class="brandLogo" :src="logoUrl" alt="Toonflow Logo" /></div>
+      <div class="brandMark"><img class="brandLogo" :src="logoUrl" alt="耀好 Logo" /></div>
       <div class="brandInfo">
-        <h3>Toonflow</h3>
+        <h3>耀好原创工作室</h3>
         <div class="brandMeta">
           <span v-if="currentVersion">v{{ currentVersion }}</span>
           <el-tag v-if="clientBuild?.channel || snapshot?.channel" type="info" size="small" round>{{ clientBuild?.channel || snapshot?.channel }}</el-tag>
@@ -29,7 +29,7 @@
                 <icon-brand-github v-if="updateSource === 'github'" :size="14" aria-hidden="true" />
                 <icon-world v-else :size="14" aria-hidden="true" />
               </template>
-              <el-option label="官方源" value="official" />
+              <el-option label="耀好源" value="official" />
               <el-option label="GitHub" value="github" />
               <el-option v-if="customUpdateUrl" label="自定义源" value="custom" />
             </el-select>
@@ -58,7 +58,7 @@
     </el-card>
 
     <el-card class="infoCard repositoryCard" shadow="never">
-      <a class="repositoryLink" :href="repositoryUrl" target="_blank" rel="noopener noreferrer" aria-label="GitHub 仓库：HBAI-Ltd/Toonflow-app">
+      <a class="repositoryLink" :href="repositoryUrl" target="_blank" rel="noopener noreferrer" aria-label="耀好原创 GitHub 仓库">
         <icon-brand-github class="repositoryIcon" :size="22" aria-hidden="true" />
         <div class="repositoryInfo">
           <span class="repositoryTitle">GitHub 仓库</span>
@@ -67,84 +67,7 @@
       </a>
     </el-card>
 
-    <el-card class="infoCard repositoryCard" shadow="never">
-      <a class="repositoryLink" href="https://api.toonflow.net/" target="_blank" rel="noopener noreferrer">
-        <icon-world class="repositoryIcon" :size="22" aria-hidden="true" />
-        <div class="repositoryInfo">
-          <span class="repositoryTitle">官方中转平台 TF-Router</span>
-        </div>
-        <icon-external-link class="externalIcon" :size="16" aria-hidden="true" />
-      </a>
-    </el-card>
-
-    <el-card class="infoCard" shadow="never">
-      <div class="cardHeader">
-        <div class="cardLabel">
-          <icon-brand-wechat :size="20" aria-hidden="true" />
-          <span>微信交流群</span>
-        </div>
-        <el-popover trigger="click" placement="top" title="微信扫码加入交流群" :width="196">
-          <template #reference>
-            <el-button size="small" :icon="IconQrcode">展示二维码</el-button>
-          </template>
-          <q-r-code
-            :value="communityUrl"
-            :size="168"
-            type="svg"
-            color="#000000"
-            bgColor="#ffffff"
-            borderless
-            role="img"
-            aria-label="Toonflow 交流群二维码" />
-          <div class="tips">
-            Toonflow 是为爱发电的开源项目。欢迎文明交流、友善反馈；回复可能需要一些时间，请避免责问或命令式沟通，感谢你的理解与尊重。
-          </div>
-        </el-popover>
-      </div>
-    </el-card>
-
-    <section class="sponsorPanel" aria-label="赞助商">
-      <h3 class="sponsorTitle">
-        <icon-gift :size="20" aria-hidden="true" />
-        赞助商
-        <span class="sponsorHint">排名不分先后</span>
-        <el-popover trigger="click" placement="top" title="微信扫码洽谈商务合作" :width="196">
-          <template #reference>
-            <el-button class="sponsorContact" size="small" type="primary" link>成为赞助商</el-button>
-          </template>
-          <q-r-code
-            value="https://work.weixin.qq.com/u/vc0f54596c5837d05a?v=5.0.8.70675"
-            :size="168"
-            type="svg"
-            color="#000000"
-            bgColor="#ffffff"
-            borderless
-            role="img"
-            aria-label="Toonflow 商务合作二维码" />
-        </el-popover>
-      </h3>
-      <div v-if="sponsors.length" class="sponsorGrid" @keydown.esc="closeSponsor">
-        <el-popover
-          v-for="sponsor in sponsors"
-          :key="sponsor.id"
-          role="dialog"
-          placement="top-start"
-          :title="sponsor.name"
-          width="min(360px, calc(100vw - 32px))"
-          :visible="activeSponsorId === sponsor.id"
-          :hideAfter="0"
-          :persistent="false"
-          @update:visible="(visible) => setSponsorVisible(sponsor.id, visible)">
-          <template #reference>
-            <button class="sponsorEntry" type="button" :aria-label="`查看 ${sponsor.name} 详情`">
-              <span v-if="sponsor.logoUrl" class="sponsorLogo"><img :src="sponsor.logoUrl" :alt="`${sponsor.name} logo`" /></span>
-              <span class="sponsorName">{{ sponsor.name }}</span>
-            </button>
-          </template>
-          <messageMarkdown v-if="sponsor.readme.trim()" class="sponsorReadme" :content="sponsor.readme" @keydown.esc="closeSponsor" />
-        </el-popover>
-      </div>
-    </section>
+    <p>基于 <a href="https://github.com/HBAI-Ltd/Toonflow-app" target="_blank" rel="noopener noreferrer">Toonflow</a> 开源项目改造，保留原作者署名与 MIT 许可。</p>
 
     <el-dialog v-model="resultVisible" title="版本更新" width="min(480px, 92vw)" alignCenter appendToBody>
       <div class="updateResult" aria-live="polite" :aria-busy="working">
@@ -213,11 +136,10 @@
 <script setup lang="ts">
 import { translate, t } from "@toonflow/i18n/vue";
 
-import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, ref } from "vue";
+import { computed, onMounted, onBeforeUnmount, ref } from "vue";
 import axios from "axios";
 import { ElMessage } from "element-plus";
 import { actualPlatform, isMobile, isLocalDesktop, isRemoteConnection } from "@/lib/platform";
-import { QRCode } from "tdesign-vue-next";
 import {
   IconRefresh,
   IconBrandGithub,
@@ -226,13 +148,9 @@ import {
   IconArrowUpCircle,
   IconCircleCheck,
   IconArrowRight,
-  IconGift,
   IconWorld,
-  IconBrandWechat,
-  IconQrcode,
 } from "@tabler/icons-vue";
-import logoUrl from "@toonflow/assets/logo.svg";
-import tf, { type TfSponsor } from "@/lib/tf";
+import logoUrl from "@toonflow/assets/yaohaoLogo.svg";
 import { saveSettings } from "@/stores/settings";
 import {
   desktopAutoUpdate,
@@ -247,9 +165,7 @@ import {
   startDesktopUpdate,
 } from "@/stores/desktopUpdate";
 
-const messageMarkdown = defineAsyncComponent(() => import("@/components/messageMarkdown.vue"));
-const repositoryUrl = "https://github.com/HBAI-Ltd/Toonflow-app";
-const communityUrl = "https://work.weixin.qq.com/u/vc36adcc89845edcbe?v=5.0.3.63936&bb=85b8d228e8";
+const repositoryUrl = "https://github.com/ouyourinn-art/Toonflow-app";
 const clientBuild = ref<{ version: string; channel: string }>();
 const currentVersion = computed(() => actualPlatform.isDesktop && actualPlatform.isRemoteConnection
   ? clientBuild.value?.version || "" : snapshot.value?.version || import.meta.env.appVersion);
@@ -262,7 +178,6 @@ const updateProgress = computed(() => snapshot.value?.updateProgress);
 const updatePercentage = computed(() => !updateInProgress.value && snapshot.value?.updateReady ? 100
   : updateProgress.value?.total ? Math.min(100, Math.floor(updateProgress.value.received / updateProgress.value.total * 100)) : 0);
 const resultVisible = ref(false);
-const activeSponsorId = ref<number>();
 const controller = new AbortController();
 const resultTitle = computed(() => {
   if (snapshot.value?.installFailure) return translate("上次更新未成功");
@@ -286,16 +201,6 @@ const resultMessage = computed(() => {
   return snapshot.value.canUpdate ? translate("有新的版本可用，下载完成后可重启更新。") : translate("当前客户端不支持应用内更新，请下载安装包。");
 });
 
-const sponsors = ref<TfSponsor[]>([]);
-
-onMounted(async () => {
-  try {
-    sponsors.value = await tf.getSponsorList({ signal: controller.signal });
-  } catch (error) {
-    if (!controller.signal.aborted) ElMessage.error(getUpdateError(error));
-  }
-});
-
 onMounted(async () => {
   if (!actualPlatform.isDesktop) return;
   try {
@@ -310,16 +215,6 @@ onMounted(async () => {
   }
 });
 onBeforeUnmount(() => controller.abort());
-
-function setSponsorVisible(id: number, visible: boolean) {
-  if (visible || activeSponsorId.value === id) activeSponsorId.value = visible ? id : undefined;
-}
-
-function closeSponsor(event: KeyboardEvent) {
-  if (!activeSponsorId.value) return;
-  event.stopPropagation();
-  activeSponsorId.value = undefined;
-}
 
 function openUpdate() {
   resultVisible.value = true;

@@ -4,8 +4,8 @@ const startupTarget = process.platform === "darwin" ? (process.arch === "x64" ? 
 
 export default {
   app: {
-    name: "toonflow",
-    identifier: "local.toonflow.desktop",
+    name: "yaohaoOriginal",
+    identifier: "jp.shugando.original.desktop",
     version: process.env.appVersion ?? "2.0.0",
     urlSchemes: ["toonflow"],
   },
@@ -53,8 +53,8 @@ export default {
     },
   },
   release: {
-    // ACT: 构建基线和补丁固定取 GitHub；客户端更新源由设置单独控制，默认官方源。
-    baseUrl: `${process.env.GITHUB_SERVER_URL || "https://github.com"}/${process.env.GITHUB_REPOSITORY || "HBAI-Ltd/Toonflow-app"}/releases/latest/download`,
+    // ACT: 耀好发行版独立使用 Fork 的更新源，避免被上游安装包覆盖。
+    baseUrl: `${process.env.GITHUB_SERVER_URL || "https://github.com"}/${process.env.GITHUB_REPOSITORY || "ouyourinn-art/Toonflow-app"}/releases/latest/download`,
     // ACT: 常规构建不访问更新服务器；release:desktop 显式开启增量构建。
     generatePatch: process.env.generateUpdatePatch === "1",
   },

@@ -15,7 +15,6 @@
           </div>
         </div>
         <el-alert v-if="item.loadError" :title="item.loadError" type="error" :closable="false" showIcon />
-        <tfAccount v-if="item.id.toLowerCase() === 'tfrouter'" :apiKey="getProviderApiKey(item.id)" :visible="visible" :saveApiKey="(key) => saveProviderApiKey(item.id, key)" />
         <div class="providerFooter">
           <div class="providerMeta">
             <el-tag v-if="item.version" size="small" type="info" effect="plain">v{{ item.version }}</el-tag>
@@ -48,11 +47,10 @@ import { ElMessage } from "element-plus";
 import { IconPlus, IconSettings, IconEdit, IconTrash, IconDownload } from "@tabler/icons-vue";
 import logoUrl from "@toonflow/assets/logo.svg";
 import type { MediaProvider } from "./types";
-import { settings, saveSettings } from "@/stores/settings";
+import { saveSettings } from "@/stores/settings";
 import { invalidateNodeModels } from "@toonflow/nodes-scaffold/nodeAi";
-import tfAccount from "../../tfAccount.vue";
 
-const { visible = true } = defineProps<{ visible?: boolean }>();
+defineProps<{ visible?: boolean }>();
 const mediaProviderDialog = shallowRef<Component>();
 const editProviderDialog = shallowRef<Component>();
 const providers = ref<MediaProvider[]>([]);
@@ -65,22 +63,6 @@ const editingProvider = ref<MediaProvider>();
 const deletingFile = ref("");
 const fetchingFile = ref("");
 let loadRequest = 0;
-
-function getProviderApiKey(id: string) {
-  const configs = settings.value.mediaProviderConfigs as Record<string, { apiKey?: unknown }> | undefined;
-  const apiKey = configs?.[id]?.apiKey;
-  return typeof apiKey === "string" ? apiKey : "";
-}
-
-async function saveProviderApiKey(id: string, key: string) {
-  await saveSettings(settings => {
-    const configs = settings.mediaProviderConfigs;
-    const current = configs && typeof configs === "object" && !Array.isArray(configs) ? configs as Record<string, unknown> : {};
-    const existing = current[id];
-    const config = existing && typeof existing === "object" && !Array.isArray(existing) ? existing as Record<string, unknown> : {};
-    return { mediaProviderConfigs: { ...current, [id]: { ...config, apiKey: key } } };
-  });
-}
 
 function refreshInstalled(event: WindowEventMap["toonflow:plugin-installed"]) {
   if (event.detail.type === "provider") void loadProviders();

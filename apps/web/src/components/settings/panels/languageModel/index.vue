@@ -14,7 +14,6 @@
             <el-text class="providerId" size="small" type="info" :title="item.id">{{ item.id }}</el-text>
           </div>
         </div>
-        <tfAccount v-if="isTfRouterProvider(item)" :apiKey="typeof item.apiKey === 'string' ? item.apiKey : ''" :visible="visible" :saveApiKey="(key) => saveProviderApiKey(item.id, key)" />
         <div class="providerFooter">
           <div class="providerMeta">
             <el-tag v-if="getProviderVersion(item)" size="small" type="info" effect="plain">v{{ getProviderVersion(item) }}</el-tag>
@@ -47,10 +46,9 @@ import { customProviders, saveSettings, type CustomProvider, type CustomProvider
 import { IconPlus, IconSettings, IconEdit, IconTrash, IconRefresh } from "@tabler/icons-vue";
 import { languageProviders } from "@toonflow/providers";
 import logoUrl from "@toonflow/assets/logo.svg";
-import tfAccount from "../../tfAccount.vue";
 import { isTfRouterProvider } from "@/lib/tf";
 
-const { visible = true } = defineProps<{ visible?: boolean }>();
+defineProps<{ visible?: boolean }>();
 const addProviderDialog = shallowRef<Component>();
 const addCustomProviderDialog = shallowRef<Component>();
 const providerDialogVisible = ref(false);
@@ -87,22 +85,6 @@ async function deleteProvider(id: string) {
     });
   } catch { ElMessage.error("删除失败，请重试"); }
   finally { deletingId.value = ""; }
-}
-
-async function saveProviderApiKey(id: string, key: string) {
-  const provider = customProviders.value.find(item => item.id === id);
-  if (!provider) throw new Error("供应商已不存在");
-  const { apiUrl, protocol, apiKey } = provider;
-  await saveSettings(settings => {
-    const current = settings.customProviders;
-    if (!Array.isArray(current)) throw new Error("配置格式错误");
-    const latest = current.find(item => item?.id === id);
-    if (!latest) throw new Error("供应商已不存在");
-    if (latest.apiUrl !== apiUrl || latest.protocol !== protocol || latest.apiKey !== apiKey) {
-      throw new Error("供应商配置已变更，请重试");
-    }
-    return { customProviders: current.map(item => item?.id === id ? { ...item, apiKey: key } : item) };
-  });
 }
 
 async function fetchProviderModels(provider: CustomProvider) {

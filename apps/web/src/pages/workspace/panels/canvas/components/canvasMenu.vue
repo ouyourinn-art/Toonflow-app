@@ -18,7 +18,7 @@
               <el-button class="iconButton" text :icon="IconPlus" :disabled="pickerBusy || editingId !== null || folderDraft !== null" title="新增画布" aria-label="新增画布" @click="handleAddCanvas" />
             </div>
             <el-scrollbar v-loading="loadingTree" maxHeight="min(440px, calc(100dvh - 198px))">
-              <el-tree v-if="canvasListVisible" ref="canvasTree" class="canvasTree" :data="treeEntries" nodeKey="path" :props="{ label: 'name', isLeaf: entry => entry.type === 'file' || entry.draft || entry.empty === true }" lazy :load="loadTreeNode" :defaultExpandedKeys="expandedFolders" :autoExpandParent="false" :icon="IconChevronRight" :currentNodeKey="activeCanvasId" :filterNodeMethod="filterEntry" highlightCurrent emptyText="" @nodeClick="selectEntry" @nodeExpand="expandFolder" @nodeCollapse="collapseFolder">
+              <el-tree v-if="canvasListVisible" ref="canvasTree" class="canvasTree" :data="treeEntries" nodeKey="path" :props="{ label: 'name', isLeaf: (entry: Record<string, unknown>) => entry.type === 'file' || entry.draft === true || entry.empty === true }" lazy :load="loadTreeNode" :defaultExpandedKeys="expandedFolders" :autoExpandParent="false" :icon="IconChevronRight" :currentNodeKey="activeCanvasId" :filterNodeMethod="filterEntry" highlightCurrent emptyText="" @nodeClick="selectEntry" @nodeExpand="expandFolder" @nodeCollapse="collapseFolder">
                 <template #default="{ data, node }">
                   <div class="canvasEntry" :title="data.path" @contextmenu="openItemMenu($event, data)">
                     <component v-if="data.type === 'directory'" :is="node.expanded && !node.isLeaf ? IconFolderOpen : IconFolder" class="folderIcon" :size="18" aria-hidden="true" />
