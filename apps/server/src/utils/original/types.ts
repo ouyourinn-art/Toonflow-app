@@ -31,7 +31,7 @@ export const originalPlanSchema = z.strictObject({
   })).min(1).max(60),
 });
 
-const generatedFile = z.strictObject({ path: z.string().min(1).max(2048), mimeType: z.string().min(1).max(128), mediaType: z.enum(["image", "video", "audio"]) });
+const generatedFile = z.strictObject({ path: z.string().min(1).max(2048), mimeType: z.string().min(1).max(128), mediaType: z.enum(["image", "video", "audio"]), taskId: z.string().min(1).max(512).optional() });
 const taskSchema = z.strictObject({
   id: z.string().min(1).max(128), kind: z.enum(["plan", "asset", "image", "video", "export"]), label: z.string(),
   status: z.enum(["pending", "running", "completed", "failed"]), prompt: z.string().optional(),

@@ -56,7 +56,7 @@ type MediaInput =
   | { type: "base64"; data: string; mimeType: string; name?: string }
   | { type: "binary"; data: Uint8Array; mimeType: string; name?: string };
 
-type MediaAsset = MediaInput & { mediaType: "image" | "video" | "audio" };
+type MediaAsset = MediaInput & { mediaType: "image" | "video" | "audio"; taskId?: string };
 
 type MediaImageInfo = { width: number; height: number; format: string };
 type MediaImageResizeOptions = { width?: number; height?: number; format?: "jpeg" | "png" | "webp"; quality?: number };

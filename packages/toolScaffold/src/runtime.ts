@@ -135,6 +135,7 @@ export interface GeneratedMedia {
   path: string;
   mimeType: string;
   mediaType: "image" | "video" | "audio";
+  taskId?: string;
 }
 
 export interface MediaContext {

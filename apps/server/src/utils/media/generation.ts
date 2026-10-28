@@ -221,7 +221,7 @@ export async function generateMedia(
         signal?.throwIfAborted();
         await writeWorkspaceFile(path, bytes, true);
         written.push(path);
-        result.push({ path: relative(directory, path).replace(/\\/g, "/"), mimeType, mediaType });
+        result.push({ path: relative(directory, path).replace(/\\/g, "/"), mimeType, mediaType, ...(typeof asset.taskId === "string" ? { taskId: asset.taskId } : {}) });
       } finally { release(); }
     }
     signal?.throwIfAborted();

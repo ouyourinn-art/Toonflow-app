@@ -4,6 +4,7 @@ import deepSeek from "./src/language/deepSeek";
 import apiMart from "./src/media/apiMart";
 import metaso from "./src/media/metaso";
 import compshare from "./src/media/compshare";
+import shugando from "./src/media/shugando";
 
 export type Provider = ProviderDefinition;
 export type ProviderPrice = NonNullable<Awaited<ReturnType<NonNullable<Provider["getPrice"]>>>>;
@@ -15,4 +16,4 @@ export type AudioConvertOptions = Parameters<ProviderTools["audio"]["convert"]>[
 export type { FfmpegFactory, FfmpegCommand } from "@toonflow/ffmpeg/types";
 
 export const languageProviders = [deepSeek] as const;
-export const mediaProviders = [apiMart, metaso, compshare] as const;
+export const mediaProviders = [apiMart, metaso, compshare, shugando] as const;
