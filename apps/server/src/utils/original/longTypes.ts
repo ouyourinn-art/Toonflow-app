@@ -24,6 +24,13 @@ export const longScenePlanSchema = z.strictObject({
   shots: z.array(z.strictObject({
     id: identifier, title: z.string().trim().min(1).max(200), sceneId: identifier,
     characterIds: z.array(identifier).max(3), action: z.string().trim().min(1).max(6000),
+    startSecond: z.number().finite().nonnegative().optional(), endSecond: z.number().finite().positive().optional(),
+    storyBeat: z.enum(["setup", "consent", "escalation", "explicitAction", "climax", "aftermath"]).optional(),
+    shotPurpose: z.string().trim().min(1).max(2000).optional(), framing: z.string().trim().min(1).max(1000).optional(),
+    characterLayout: z.array(z.strictObject({
+      characterId: identifier, screenRegion: z.enum(["leftThird", "centerThird", "rightThird"]),
+      position: z.string().trim().min(1).max(1000), facing: z.string().trim().min(1).max(1000),
+    })).max(3).optional(),
     dialogue: z.string().max(6000), startState: z.string().trim().min(1).max(6000),
     endState: z.string().trim().min(1).max(6000), continuity: z.string().trim().min(1).max(6000),
     imagePrompt: z.string().trim().min(1).max(8000), videoPrompt: z.string().trim().min(1).max(8000),

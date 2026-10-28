@@ -22,6 +22,8 @@ export const originalConfigSchema = z.strictObject({
   adultExplicit: z.boolean().default(false),
   characterLock: z.boolean().default(true),
   continuousShots: z.boolean().default(false),
+  imageConcurrency: z.number().int().min(1).max(8).default(3),
+  videoConcurrency: z.number().int().min(1).max(4).default(2),
 });
 
 const identifier = z.string().regex(/^[a-z][a-zA-Z0-9]{0,63}$/);
@@ -37,6 +39,13 @@ export const originalPlanSchema = z.strictObject({
   shots: z.array(z.strictObject({
     id: identifier, title: z.string().trim().min(1).max(200), sceneId: identifier,
     characterIds: z.array(identifier).max(20),
+    startSecond: z.number().finite().nonnegative().optional(), endSecond: z.number().finite().positive().optional(),
+    storyBeat: z.enum(["setup", "consent", "escalation", "explicitAction", "climax", "aftermath"]).optional(),
+    shotPurpose: z.string().trim().min(1).max(2000).optional(), framing: z.string().trim().min(1).max(1000).optional(),
+    characterLayout: z.array(z.strictObject({
+      characterId: identifier, screenRegion: z.enum(["leftThird", "centerThird", "rightThird"]),
+      position: z.string().trim().min(1).max(1000), facing: z.string().trim().min(1).max(1000),
+    })).max(3).optional(),
     action: z.string().trim().min(1).max(6000), dialogue: z.string().max(6000),
     startState: z.string().trim().min(1).max(6000).optional(),
     endState: z.string().trim().min(1).max(6000).optional(),

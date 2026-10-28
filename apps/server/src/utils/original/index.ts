@@ -11,6 +11,7 @@ import { lockWorkspaceFiles, resolveWorkspacePath, writeWorkspaceFile } from "@/
 import { inspectVideoFaces, prepareFaceQa } from "./faceQa";
 import { buildLongBiblePrompt, buildLongMediaTasks, buildLongScenePrompt, composeLongPlan, validateLongBible, validateLongScene } from "./longProduction";
 import { longBibleSchema, longScenePlanSchema, type LongScenePlan } from "./longTypes";
+import { adultDirection, buildAssetPrompt, buildImagePrompt, buildVideoPrompt, faceQaApplicable, storyArcInstruction, timingInstruction } from "./prompt";
 import { originalPlanSchema, originalRunSchema, type OriginalConfig, type OriginalPlan, type OriginalRun, type OriginalTask } from "./types";
 
 type Control = { state: OriginalRun; pause: boolean; saving: Promise<void> };
@@ -78,8 +79,8 @@ async function preflight(config: OriginalConfig) {
     if (config.sceneCount > config.shotCount) fail("长片场景数不能超过镜头数");
     if (Math.ceil(config.shotCount / config.sceneCount) > 12) fail("每场最多 12 镜，请增加长片场景数");
     if (config.costLimit > 0 && config.shotCount * config.costPerVideo > config.costLimit) fail(`预算上限不足：首轮视频预计 ${Number((config.shotCount * config.costPerVideo).toFixed(2))} USD`);
-    if (config.faceQaEnabled) await prepareFaceQa();
   }
+  if (config.faceQaEnabled) await prepareFaceQa();
   const models = await listMediaModels();
   const image = models.find(model => model.type === "image" && model.providerId === config.image.providerId && model.modelId === config.image.modelId);
   const video = models.find(model => model.type === "video" && model.providerId === config.video.providerId && model.modelId === config.video.modelId);
@@ -118,7 +119,21 @@ function validatePlan(plan: OriginalPlan, config: OriginalConfig) {
     if (shotIds.has(shot.id)) fail(`分镜 ID 重复：${shot.id}`);
     shotIds.add(shot.id);
     if (!plan.assets.some(asset => asset.id === shot.sceneId && asset.kind === "scene")) fail(`分镜 ${shot.id} 引用了不存在的场景`);
-    if (new Set(shot.characterIds).size !== shot.characterIds.length || shot.characterIds.some(id => !plan.assets.some(asset => asset.id === id && asset.kind === "character"))) fail(`分镜 ${shot.id} 的角色引用无效`);
+    if (new Set(shot.characterIds).size !== shot.characterIds.length || shot.characterIds.length > 3 || shot.characterIds.some(id => !plan.assets.some(asset => asset.id === id && asset.kind === "character"))) fail(`分镜 ${shot.id} 的角色引用无效或超过 3 人`);
+    if (shot.startSecond !== plan.shots.indexOf(shot) * config.duration || shot.endSecond !== shot.startSecond + config.duration) fail(`分镜 ${shot.id} 的绝对时间轴不连续`);
+    if (!shot.storyBeat || !shot.shotPurpose || !shot.framing) fail(`分镜 ${shot.id} 缺少剧情节拍、镜头目的或景别`);
+    const layout = shot.characterLayout ?? fail(`分镜 ${shot.id} 缺少人物区域`);
+    const layoutIds = layout.map(item => item.characterId);
+    if (layoutIds.length !== shot.characterIds.length || new Set(layoutIds).size !== layoutIds.length || layoutIds.some(id => !shot.characterIds.includes(id)) || new Set(layout.map(item => item.screenRegion)).size !== layout.length) fail(`分镜 ${shot.id} 的人物区域未与实际出场角色一一绑定`);
+  }
+  const requiredBeats = config.adultExplicit ? ["setup", "consent", "escalation", "explicitAction", "climax", "aftermath"] : ["setup", "escalation", "climax", "aftermath"];
+  const beats = new Set(plan.shots.map(shot => shot.storyBeat));
+  const missingBeats = requiredBeats.filter(beat => !beats.has(beat as NonNullable<OriginalPlan["shots"][number]["storyBeat"]>));
+  if (missingBeats.length) fail(`完整剧情缺少必要节拍：${missingBeats.join("、")}`);
+  if (config.adultExplicit) {
+    const text = plan.shots.map(shot => `${shot.shotPurpose} ${shot.framing} ${shot.action} ${shot.imagePrompt} ${shot.videoPrompt}`).join("\n");
+    if (!/(生殖器|阴茎|阴道|外阴|genital).{0,40}(特写|近景|close[ -]?up)|(特写|近景|close[ -]?up).{0,40}(生殖器|阴茎|阴道|外阴|genital)/i.test(text)) fail("露骨成人剧情缺少无遮挡的生殖器细节特写");
+    if (!/(性交|插入|交合|penetrat|intercourse)/i.test(text)) fail("露骨成人剧情缺少明确的双方自愿性交镜头");
   }
   if (config.continuousShots) {
     for (const [index, shot] of plan.shots.entries()) {
@@ -138,9 +153,9 @@ async function planStory(cwd: string, state: OriginalRun) {
     ? `这 ${config.shotCount} 镜不是独立短片，而是同一条连续剧情，总时长严格为 ${config.shotCount * config.duration} 秒。每镜必须填写 startState、endState、continuity：startState 写镜头第一帧中人物精确位置、朝向、姿势、衣物状态、手脚位置、道具、环境和光线；endState 写最后一帧的同类信息；第 2 镜起的 startState 必须无缝继承上一镜 endState，continuity 明确说明动作、空间、视线、情绪与因果如何接续。完整剧情须有开端、推进、高潮和结尾，不能每 15 秒重新开场。`
     : "保持镜头间的身份、服装、空间、视线、动作和前后因果连续。";
   const adult = config.adultExplicit
-    ? "本项目是仅含虚构成年人（所有角色均明确 25 岁以上）、清醒、知情并自愿参与的露骨成人作品。按需求直接、具体、生动地设计裸体和双方自愿的性行为；生图与视频提示词必须明确生殖器持续清晰可见、性交动作与插入关系可辨认，不用腿、手、床单、阴影、家具或景别遮挡，不裁切腰部以下，也不用亲吻或拥抱替代剧情指定的性行为。禁止加入未成年人或年龄模糊者、强迫、迷奸、昏迷、偷窥、乱伦、暴力或非人动物。所有人物均为原创虚构形象，不仿照真实人物。"
+    ? adultDirection
     : "内容强度严格跟随用户创作需求，不自行添加露骨成人内容。";
-  const prompt = `根据创作需求写出连贯完整的短片剧本与可直接制作的分镜方案。\n需求：${config.brief}\n视觉风格：${config.style || "电影写实"}\n严格锁定 ${config.characterCount} 个角色、${config.shotCount} 个镜头；每镜 ${config.duration} 秒，画幅 ${config.ratio}。\n${adult}\n${identity}\n${continuity}\n先完成剧本，再从完整剧本整理唯一角色和场景资产；同一人的称呼、衣着或年龄变化不能拆成新角色，别名统一归入同一 ID。每镜必须仅引用资产表中实际出场的角色 ID 和一个场景 ID。\nscript 按场次写动作、台词、转场；assets 的 description 写固定外观和服装或场景布局，imagePrompt 写资产图构图与光照。shots 的 imagePrompt 写本镜第一帧的静态构图、人物位置、景别和光照；videoPrompt 写从 startState 到 endState 的连续动作、运镜、节奏和声音。不要把未出场角色、拼贴、字幕或提示词文字画进图。台词写在 dialogue 中。\n只输出符合下列 JSON Schema 的一个 JSON 对象，不加代码围栏或解释：\n${JSON.stringify(z.toJSONSchema(originalPlanSchema))}`;
+  const prompt = `根据创作需求写出连贯完整的短片剧本与可直接制作的分镜方案。\n需求：${config.brief}\n视觉风格：${config.style || "电影写实"}\n严格锁定 ${config.characterCount} 个角色、${config.shotCount} 个镜头；每镜 ${config.duration} 秒，画幅 ${config.ratio}。\n${adult}\n${storyArcInstruction(config)}\n${timingInstruction(config)}\n${identity}\n${continuity}\n先完成剧本，再从完整剧本整理唯一角色和场景资产；同一人的称呼、衣着或年龄变化不能拆成新角色，别名统一归入同一 ID。每镜最多 3 人，必须仅引用资产表中实际出场的角色 ID 和一个场景 ID。每镜填写 storyBeat、shotPurpose、framing 和 characterLayout；characterLayout 必须与 characterIds 完全相同且每人绑定不同的 leftThird / centerThird / rightThird 竖屏区域，写明位置、姿势、朝向与视线。\nscript 按场次写动作、台词、转场和因果结果；assets 的 description 写固定外观和服装或场景布局，imagePrompt 写资产图构图与光照。shots 的 imagePrompt 写本镜第一帧的静态构图；videoPrompt 按 0-${config.duration} 秒写从 startState 到 endState 的连续动作、运镜、节奏和声音。不要把未出场角色、拼贴、字幕或提示词文字画进图。台词写在 dialogue 中。\n只输出符合下列 JSON Schema 的一个 JSON 对象，不加代码围栏或解释：\n${JSON.stringify(z.toJSONSchema(originalPlanSchema))}`;
   state.tasks[0]!.prompt = prompt;
   await write(cwd, `${runDirectory(state)}/languagePrompt.txt`, prompt);
   const configured = getConfiguredModel(config.language.providerId, config.language.modelId);
@@ -152,17 +167,26 @@ async function planStory(cwd: string, state: OriginalRun) {
   if (message.stopReason !== "stop") throw new Error(message.errorMessage || `剧本请求未正常结束：${message.stopReason}`);
   state.usage = { input: message.usage.input, output: message.usage.output, totalTokens: message.usage.totalTokens };
   const plan = originalPlanSchema.parse(JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")));
+  for (const [index, shot] of plan.shots.entries()) {
+    shot.startSecond = index * config.duration;
+    shot.endSecond = shot.startSecond + config.duration;
+  }
   validatePlan(plan, config);
   await write(cwd, `${runDirectory(state)}/plan.json`, JSON.stringify(plan, null, 2));
   state.plan = plan;
-  const style = config.style ? `\n统一风格：${config.style}` : "";
-  const adultVisual = config.adultExplicit ? "\n露骨成人画面要求：所有人物均为 25 岁以上的原创虚构成年人且清醒、自愿；生殖器持续清晰可见，性交动作和插入关系可辨认；不用腿、手、床单、阴影、家具或景别遮挡，不裁切腰部以下，不用亲吻或拥抱替代指定性行为。" : "";
-  const adultCharacterAsset = config.adultExplicit ? "\n成人角色资产要求：原创虚构且明确 25 岁以上，裸体全身身份基准，生殖器与身体比例清晰可见且无遮挡，不摆出性行为姿势，不加入其他人物。" : "";
-  const characterIdentity = config.characterLock ? "\n人物锁定：严格保持角色脸型、五官、发型、发色、肤色、身高、体型、身体比例、痣或纹身等身份特征，不生成相似但不同的人。" : "";
+  const previousShot = (shot: OriginalPlan["shots"][number]) => {
+    const index = plan.shots.indexOf(shot);
+    return config.continuousShots ? plan.shots.slice(0, index).findLast(item => item.sceneId === shot.sceneId) : undefined;
+  };
   state.tasks.splice(1, state.tasks.length - 1,
-    ...plan.assets.map<OriginalTask>(asset => ({ id: `asset:${asset.id}`, kind: "asset", label: `${asset.kind === "character" ? "角色" : "场景"}：${asset.name}`, status: "pending", prompt: `${asset.imagePrompt}\n固定特征：${asset.description}${style}${asset.kind === "character" ? `${characterIdentity}${adultCharacterAsset}\n单人角色资产图，只出现此角色，完整展示固定外观，不拼贴，不添加其他人物。` : "\n独立场景资产图，清晰展示空间与光照，不出现人物。"}` })),
-    ...plan.shots.map<OriginalTask>(shot => ({ id: `image:${shot.id}`, kind: "image", label: `分镜图：${shot.title}`, status: "pending", prompt: `${shot.imagePrompt}${style}${characterIdentity}${adultVisual}\n本镜开始状态：${shot.startState || "按完整剧本承接"}\n参考图按以下顺序提供：\n${[...shot.characterIds, shot.sceneId].map((id, index) => { const asset = plan.assets.find(item => item.id === id)!; return `${index + 1}. ${asset.name}（${asset.id}，${asset.kind === "character" ? "角色身份与服装" : "场景空间与光照"}）`; }).join("\n")}\n仅描绘以上实际出场角色，保持参考人物身份与服装一致，不添加其他人物。`, references: [...shot.characterIds, shot.sceneId].map(id => `asset:${id}`) })),
-    ...plan.shots.map<OriginalTask>((shot, index) => ({ id: `video:${shot.id}`, kind: "video", label: `镜头视频：${shot.title}`, status: "pending", prompt: `${shot.videoPrompt}\n动作：${shot.action}\n对白：${shot.dialogue || "无对白"}\n开始状态：${shot.startState || "按分镜图开始"}\n结束状态：${shot.endState || "按完整剧本结束"}\n与上一镜衔接：${shot.continuity || (index === 0 ? "全片开场" : "无缝承接上一镜最后一帧")}${style}${characterIdentity}${adultVisual}\n${config.continuousShots && index > 0 ? "以所附上一镜最后一帧为本镜第一帧，直接延续其中全部人物、姿势、空间、物件和光线，不得重新开场或重置人物。" : "以所附分镜图为画面依据，保持人物身份、服装与场景连续。"}`, references: [`image:${shot.id}`] })),
+    ...plan.assets.map<OriginalTask>(asset => ({ id: `asset:${asset.id}`, kind: "asset", label: `${asset.kind === "character" ? "角色" : "场景"}：${asset.name}`, status: "pending", sceneId: asset.kind === "scene" ? asset.id : undefined, prompt: buildAssetPrompt(asset, config) })),
+    ...plan.shots.map<OriginalTask>(shot => {
+      const previous = previousShot(shot);
+      const references = [...shot.characterIds.map(id => `asset:${id}`), previous ? `image:${previous.id}` : `asset:${shot.sceneId}`];
+      return { id: `image:${shot.id}`, kind: "image", label: `分镜图：${shot.title}`, status: "pending", sceneId: shot.sceneId, prompt: buildImagePrompt(plan, shot, config, references), references };
+    }),
+    ...plan.shots.map<OriginalTask>(shot => ({ id: `video:${shot.id}`, kind: "video", label: `镜头视频：${shot.title}`, status: "pending", sceneId: shot.sceneId, attempts: 0, prompt: buildVideoPrompt(plan, shot, config), references: [`image:${shot.id}`] })),
+    ...(config.faceQaEnabled ? plan.shots.filter(shot => shot.characterIds.length && faceQaApplicable(shot)).map<OriginalTask>(shot => ({ id: `qa:${shot.id}`, kind: "qa", label: `人物一致性质检：${shot.title}`, status: "pending", sceneId: shot.sceneId, references: [`video:${shot.id}`, ...shot.characterIds.map(id => `asset:${id}`)] })) : []),
     ...(config.stitch ? [{ id: "export", kind: "export" as const, label: "合成完整视频", status: "pending" as const }] : []),
   );
 }
@@ -211,17 +235,22 @@ async function planLongScene(cwd: string, state: OriginalRun, task: OriginalTask
   if (!scene) fail("分场任务引用了不存在的场景");
   const previous = sceneIndex > 0 ? scenePlans[bible.scenes[sceneIndex - 1]!.id] : undefined;
   if (sceneIndex > 0 && !previous) fail("上一场尚未完成，不能展开当前分场");
-  const prompt = buildLongScenePrompt(state.config, bible, scene, previous?.shots.at(-1)?.endState);
+  const startShot = bible.scenes.slice(0, sceneIndex).reduce((total, item) => total + item.shotCount, 0);
+  const prompt = buildLongScenePrompt(state.config, bible, scene, startShot, previous?.shots.at(-1)?.endState);
   task.prompt = prompt;
   await write(cwd, `${runDirectory(state)}/scenePrompts/${scene.id}.txt`, prompt);
   const text = await languageResponse(state, prompt);
   await write(cwd, `${runDirectory(state)}/sceneResponses/${scene.id}.txt`, text);
   const plan = longScenePlanSchema.parse(parseJsonResponse(text));
+  for (const [index, shot] of plan.shots.entries()) {
+    shot.startSecond = (startShot + index) * state.config.duration;
+    shot.endSecond = shot.startSecond + state.config.duration;
+  }
   plan.shots[0]!.startState = previous?.shots.at(-1)?.endState ?? scene.startState;
   for (let index = 1; index < plan.shots.length; index++) plan.shots[index]!.startState = plan.shots[index - 1]!.endState;
   plan.shots.at(-1)!.endState = scene.endState;
   const usedShotIds = new Set(Object.values(scenePlans).flatMap(item => item.shots.map(shot => shot.id)));
-  validateLongScene(plan, bible, scene, usedShotIds);
+  validateLongScene(plan, bible, scene, usedShotIds, state.config);
   scenePlans[scene.id] = plan;
   state.scenePlans = scenePlans;
   await write(cwd, `${runDirectory(state)}/scenes/${scene.id}.json`, JSON.stringify(plan, null, 2));
@@ -345,11 +374,103 @@ async function publishCompleted(cwd: string, state: OriginalRun) {
   if (!plan) return;
   await publishCanvas(cwd, state, "story", "故事方案", `# ${plan.title}\n\n${plan.synopsis}`);
   await publishCanvas(cwd, state, "script", "完整剧本", `# ${plan.title}\n\n${plan.script}`);
-  await publishCanvas(cwd, state, "storyboard", "导演分镜", plan.shots.map((shot, index) => `## ${index + 1}. ${shot.title}\n\n场景：${shot.sceneId} · 角色：${shot.characterIds.join("、") || "空镜"} · ${state.config.duration}s\n\n开始状态：${shot.startState || "未单独记录"}\n\n结束状态：${shot.endState || "未单独记录"}\n\n衔接说明：${shot.continuity || (index === 0 ? "全片开场" : "按剧本承接")}\n\n${shot.action}\n\n对白：${shot.dialogue}\n\n生图提示词：${shot.imagePrompt}\n\n视频提示词：${shot.videoPrompt}`).join("\n\n"));
+  await publishCanvas(cwd, state, "storyboard", "导演分镜", plan.shots.map((shot, index) => `## ${index + 1}. ${shot.title}\n\n绝对时间：${shot.startSecond}-${shot.endSecond}s · 剧情节拍：${shot.storyBeat} · 镜头目的：${shot.shotPurpose}\n\n场景：${shot.sceneId} · 角色：${shot.characterIds.join("、") || "空镜"} · 景别：${shot.framing}\n\n人物区域：${shot.characterLayout?.map(item => `${item.characterId}=${item.screenRegion}`).join("、") || "空镜"}\n\n开始状态：${shot.startState || "未单独记录"}\n\n结束状态：${shot.endState || "未单独记录"}\n\n衔接说明：${shot.continuity || (index === 0 ? "全片开场" : "按剧本承接")}\n\n${shot.action}\n\n对白：${shot.dialogue}\n\n生图提示词：${shot.imagePrompt}\n\n视频提示词：${shot.videoPrompt}`).join("\n\n"));
   for (const [kind, stage, title] of [["asset", "assets", "人物与场景资产"], ["image", "images", "分镜图"], ["video", "videos", "镜头视频"], ["export", "export", "最终视频"]] as const) {
     const tasks = state.tasks.filter(task => task.kind === kind);
     if (tasks.length && tasks.every(task => task.status === "completed")) await publishCanvas(cwd, state, stage, title, tasks.map(task => `## ${task.label}\n\n${task.prompt || "按镜头顺序合成"}\n\n参考任务：${task.references?.join("、") || "无"}\n\n${task.files?.map(file => `素材：${file.path}`).join("\n") || ""}`).join("\n\n"), tasks);
   }
+}
+
+function previousVideoTask(state: OriginalRun, task: OriginalTask) {
+  const shotId = task.id.slice("video:".length);
+  const shotIndex = state.plan?.shots.findIndex(shot => shot.id === shotId) ?? -1;
+  if (shotIndex <= 0) return undefined;
+  const current = state.plan!.shots[shotIndex]!;
+  const previous = state.plan!.shots.slice(0, shotIndex).findLast(shot => shot.sceneId === current.sceneId);
+  return previous ? state.tasks.find(item => item.id === `video:${previous.id}`) : undefined;
+}
+
+function taskDependencies(state: OriginalRun, task: OriginalTask) {
+  if (task.kind === "export") return state.tasks.filter(item => item !== task && !["plan", "bible", "scenePlan"].includes(item.kind));
+  const dependencies = (task.references ?? []).map(id => state.tasks.find(item => item.id === id)).filter((item): item is OriginalTask => !!item);
+  if (task.kind === "video" && state.config.continuousShots) {
+    const previous = previousVideoTask(state, task);
+    if (previous) {
+      dependencies.push(previous);
+      const qa = state.tasks.find(item => item.id === previous.id.replace(/^video:/, "qa:"));
+      if (qa) dependencies.push(qa);
+    }
+  }
+  return [...new Set(dependencies)];
+}
+
+function ready(state: OriginalRun, task: OriginalTask) {
+  return task.status === "pending" && taskDependencies(state, task).every(item => item.status === "completed");
+}
+
+async function runTask(cwd: string, control: Control, models: Awaited<ReturnType<typeof preflight>>, task: OriginalTask) {
+  const state = control.state;
+  if (task.kind === "plan") await planStory(cwd, state);
+  else if (task.kind === "bible") await planLongBible(cwd, state, task);
+  else if (task.kind === "scenePlan") await planLongScene(cwd, state, task);
+  else if (task.kind === "export") task.files = await mergeVideos(cwd, state);
+  else if (task.kind === "qa") {
+    const { result, videoTask } = await inspectFaces(cwd, state, task);
+    if (!result.passed) {
+      const attempts = videoTask.attempts ?? 1;
+      if (attempts > state.config.maxRetries) fail(`人物一致性质检未通过，已用完 ${state.config.maxRetries} 次重试：${result.reasons.join("；")}`);
+      task.status = "pending";
+      videoTask.status = "pending";
+      delete videoTask.files;
+      delete videoTask.referenceFrame;
+      return;
+    }
+  } else {
+    const config = state.config;
+    const model = task.kind === "video" ? models.video : models.image;
+    const selection = task.kind === "video" ? config.video : config.image;
+    const references = (task.references ?? []).map(id => state.tasks.find(item => item.id === id && item.status === "completed")?.files?.[0] ?? fail(`参考资产尚未完成：${id}`));
+    await verifyFiles(cwd, references);
+    const request: MediaGenerationRequest = {
+      ...selection, prompt: task.prompt!, ratio: config.ratio,
+      outputDirectory: `${runDirectory(state)}/${task.kind}`,
+      other: Object.fromEntries((model.rules ?? []).map(rule => [rule.field, rule.value])),
+    };
+    if (task.kind === "video") {
+      if (config.productionMode === "long") {
+        const nextCost = Number(((state.estimatedCost ?? 0) + config.costPerVideo).toFixed(2));
+        if (config.costLimit > 0 && nextCost > config.costLimit) fail(`已到预算上限 ${config.costLimit} USD，停止提交新的付费视频任务`);
+        state.estimatedCost = nextCost;
+      }
+      task.attempts = (task.attempts ?? 0) + 1;
+      await save(cwd, control);
+      request.duration = config.duration;
+      request.resolution = config.resolution;
+      request.mode = videoMode(model);
+      let referenceMedia = references[0];
+      if (config.continuousShots) {
+        const previousTask = previousVideoTask(state, task);
+        if (previousTask) {
+          const previous = previousTask.files?.[0] ?? fail("同场上一镜视频尚未完成，无法建立连续首帧");
+          referenceMedia = await extractLastFrame(cwd, state, previous, task.id.slice("video:".length));
+        }
+      }
+      if (referenceMedia) {
+        task.referenceFrame = referenceMedia.path;
+        const reference = { path: referenceMedia.path, mimeType: referenceMedia.mimeType };
+        if (Array.isArray(request.mode) || request.mode === "singleImage") request.images = [reference];
+        else request.firstFrame = reference;
+      } else delete task.referenceFrame;
+      await save(cwd, control);
+      if (model.audio === "optional") request.generateAudio = true;
+    } else {
+      request.size = model.imageSizes?.[0];
+      if (references.length) request.images = references.map(file => ({ path: file.path, mimeType: file.mimeType }));
+    }
+    task.files = await generateMedia(cwd, task.kind === "video" ? "video" : "image", request, AbortSignal.timeout(30 * 60 * 1000));
+    await verifyFiles(cwd, task.files);
+  }
+  if (task.status === "running") task.status = "completed";
 }
 
 async function execute(cwd: string, control: Control, models: Awaited<ReturnType<typeof preflight>>) {
@@ -357,97 +478,60 @@ async function execute(cwd: string, control: Control, models: Awaited<ReturnType
   try {
     for (const task of state.tasks) if (task.status === "completed" && task.files) await verifyFiles(cwd, task.files);
     await publishCompleted(cwd, state);
-    // ACT: 串行执行，人物资产只生成一次；失败不自动重交付费请求，明确续跑才重试。
-    for (let index = 0; index < state.tasks.length; index++) {
-      const task = state.tasks[index]!;
-      if (control.pause) break;
-      if (task.status === "completed") continue;
-      task.status = "running";
-      delete task.error;
+    while (!control.pause) {
+      const planning = state.tasks.find(task => ["plan", "bible", "scenePlan"].includes(task.kind) && task.status === "pending");
+      if (planning) {
+        planning.status = "running";
+        delete planning.error;
+        await save(cwd, control);
+        try { await runTask(cwd, control, models, planning); }
+        catch (error) {
+          planning.status = "failed";
+          planning.error = error instanceof Error ? error.message : "规划任务失败";
+          break;
+        }
+        await save(cwd, control);
+        await publishCompleted(cwd, state);
+        continue;
+      }
+      const imageTasks = state.tasks.filter(task => ["asset", "image"].includes(task.kind) && ready(state, task)).slice(0, state.config.imageConcurrency);
+      const videoTasks = state.tasks.filter(task => task.kind === "video" && ready(state, task)).slice(0, state.config.videoConcurrency);
+      const qaTasks = state.tasks.filter(task => task.kind === "qa" && ready(state, task)).slice(0, state.config.videoConcurrency);
+      const exportTask = state.tasks.find(task => task.kind === "export" && ready(state, task));
+      const batch = exportTask ? [exportTask] : [...imageTasks, ...videoTasks, ...qaTasks];
+      if (!batch.length) break;
+      for (const task of batch) { task.status = "running"; delete task.error; }
       await save(cwd, control);
-      if (task.kind === "plan") await planStory(cwd, state);
-      else if (task.kind === "bible") await planLongBible(cwd, state, task);
-      else if (task.kind === "scenePlan") await planLongScene(cwd, state, task);
-      else if (task.kind === "export") task.files = await mergeVideos(cwd, state);
-      else if (task.kind === "qa") {
-        const { result, videoTask } = await inspectFaces(cwd, state, task);
-        if (!result.passed) {
-          const attempts = videoTask.attempts ?? 1;
-          if (attempts > state.config.maxRetries) fail(`人物一致性质检未通过，已用完 ${state.config.maxRetries} 次重试：${result.reasons.join("；")}`);
-          task.status = "pending";
-          videoTask.status = "pending";
-          delete videoTask.files;
-          delete videoTask.referenceFrame;
-          await save(cwd, control);
-          index = state.tasks.indexOf(videoTask) - 1;
-          continue;
-        }
+      const results = await Promise.allSettled(batch.map(task => runTask(cwd, control, models, task)));
+      for (const [index, result] of results.entries()) {
+        if (result.status === "fulfilled") continue;
+        const task = batch[index]!;
+        task.status = "failed";
+        task.error = result.reason instanceof Error ? result.reason.message : "生成任务失败";
       }
-      else {
-        const config = state.config;
-        const model = task.kind === "video" ? models.video : models.image;
-        const selection = task.kind === "video" ? config.video : config.image;
-        const references = (task.references ?? []).map(id => state.tasks.find(item => item.id === id && item.status === "completed")?.files?.[0] ?? fail(`参考资产尚未完成：${id}`));
-        await verifyFiles(cwd, references);
-        const request: MediaGenerationRequest = {
-          ...selection, prompt: task.prompt!, ratio: config.ratio,
-          outputDirectory: `${runDirectory(state)}/${task.kind}`,
-          other: Object.fromEntries((model.rules ?? []).map(rule => [rule.field, rule.value])),
-        };
-        if (task.kind === "video") {
-          if (config.productionMode === "long") {
-            const nextCost = Number(((state.estimatedCost ?? 0) + config.costPerVideo).toFixed(2));
-            if (config.costLimit > 0 && nextCost > config.costLimit) fail(`已到预算上限 ${config.costLimit} USD，停止提交新的付费视频任务`);
-            state.estimatedCost = nextCost;
-            task.attempts = (task.attempts ?? 0) + 1;
-            await save(cwd, control);
-          }
-          request.duration = config.duration;
-          request.resolution = config.resolution;
-          request.mode = videoMode(model);
-          let referenceMedia = references[0];
-          if (config.continuousShots) {
-            const videoTasks = state.tasks.filter(item => item.kind === "video");
-            const videoIndex = videoTasks.indexOf(task);
-            const previousTask = videoIndex > 0 ? videoTasks[videoIndex - 1] : undefined;
-            const canContinue = previousTask && (config.productionMode === "short" || previousTask.sceneId === task.sceneId);
-            if (canContinue) {
-              const previous = previousTask.files?.[0] ?? fail("上一镜视频尚未完成，无法建立连续首帧");
-              referenceMedia = await extractLastFrame(cwd, state, previous, task.id.slice("video:".length));
-            }
-          }
-          if (referenceMedia) {
-            task.referenceFrame = referenceMedia.path;
-            await save(cwd, control);
-            const reference = { path: referenceMedia.path, mimeType: referenceMedia.mimeType };
-            if (Array.isArray(request.mode) || request.mode === "singleImage") request.images = [reference];
-            else request.firstFrame = reference;
-          } else {
-            delete task.referenceFrame;
-            await save(cwd, control);
-          }
-          if (model.audio === "optional") request.generateAudio = true;
-        } else {
-          request.size = model.imageSizes?.[0];
-          if (references.length) request.images = references.map(file => ({ path: file.path, mimeType: file.mimeType }));
-        }
-        task.files = await generateMedia(cwd, task.kind === "video" ? "video" : "image", request, AbortSignal.timeout(30 * 60 * 1000));
-        task.status = "completed";
-        await verifyFiles(cwd, task.files);
-      }
-      task.status = "completed";
       await save(cwd, control);
       await publishCompleted(cwd, state);
       await save(cwd, control);
     }
     await publishCompleted(cwd, state);
-    state.status = state.tasks.every(task => task.status === "completed") ? "completed" : "paused";
+    const failed = state.tasks.filter(task => task.status === "failed");
+    const pending = state.tasks.filter(task => task.status === "pending");
+    if (state.tasks.every(task => task.status === "completed")) {
+      state.status = "completed";
+      delete state.error;
+    } else if (control.pause) {
+      state.status = "paused";
+    } else {
+      state.status = "failed";
+      state.error = failed.length
+        ? failed.map(task => `${task.label}：${task.error || "失败"}`).join("\n")
+        : `有 ${pending.length} 个任务因前置任务未完成而阻塞`;
+    }
     await save(cwd, control);
   } catch (error) {
     state.status = "failed";
     state.error = error instanceof Error ? error.message : "工作流执行失败";
-    const task = state.tasks.find(item => item.status === "running");
-    if (task) { task.status = "failed"; task.error = state.error; }
+    for (const task of state.tasks.filter(item => item.status === "running")) { task.status = "failed"; task.error = state.error; }
     await save(cwd, control).catch(cause => console.error("原创工作流保存失败", cause));
   } finally { active.delete(key(cwd)); }
 }

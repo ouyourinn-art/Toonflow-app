@@ -9,11 +9,11 @@
       <template v-if="editing">
         <div class="presetGrid">
           <div class="presetBar">
-            <div><strong>韩国成人露骨 90 秒短片</strong><span>原创虚构韩国成年人，6 镜 × 15 秒，固定人物，尾帧连续。</span></div>
-            <el-button type="danger" size="large" :disabled="busy || !statusReady" @click="applyAdult90Preset">套用 90 秒</el-button>
+            <div><strong>韩国成人露骨 2 分钟竖屏短片</strong><span>原创虚构韩国成年人，8 镜 × 15 秒，人物母版锁定，图片 3 路、视频 2 路并发。</span></div>
+            <el-button type="danger" size="large" :disabled="busy || !statusReady" @click="applyAdult120Preset">套用 2 分钟</el-button>
           </div>
           <div class="presetBar longPreset">
-            <div><strong>韩国成人露骨 10 分钟长片</strong><span>原创虚构韩国成年人，40 镜 × 15 秒，分场锚定、逐镜验脸。</span></div>
+            <div><strong>韩国成人露骨 10 分钟竖屏长片</strong><span>原创虚构韩国成年人，40 镜 × 15 秒，分场锚定、逐镜验脸、跨场并发。</span></div>
             <el-button type="danger" size="large" :disabled="busy || !statusReady" @click="applyAdultLongPreset">套用 10 分钟</el-button>
           </div>
         </div>
@@ -51,9 +51,11 @@
               <el-form-item label="单镜失败重试"><el-input-number v-model="form.maxRetries" :min="0" :max="5" :precision="0" /></el-form-item>
               <el-form-item label="视频预算上限（USD）"><el-input-number v-model="form.costLimit" :min="0" :max="100000" :step="10" :precision="2" /></el-form-item>
               <el-form-item label="单段视频估算（USD）"><el-input-number v-model="form.costPerVideo" :min="0.01" :max="10000" :step="0.01" :precision="2" /></el-form-item>
-              <el-form-item label="人物一致性质检"><el-switch v-model="form.faceQaEnabled" activeText="YuNet + SFace 抽帧验脸" /></el-form-item>
-              <el-form-item label="同人脸阈值"><el-input-number v-model="form.faceThreshold" :min="-1" :max="1" :step="0.01" :precision="3" :disabled="!form.faceQaEnabled" /></el-form-item>
             </template>
+            <el-form-item label="图片并发数"><el-input-number v-model="form.imageConcurrency" :min="1" :max="8" :precision="0" /></el-form-item>
+            <el-form-item label="视频并发数"><el-input-number v-model="form.videoConcurrency" :min="1" :max="4" :precision="0" /></el-form-item>
+            <el-form-item label="人物一致性质检"><el-switch v-model="form.faceQaEnabled" activeText="YuNet + SFace 抽帧验脸" /></el-form-item>
+            <el-form-item label="同人脸阈值"><el-input-number v-model="form.faceThreshold" :min="-1" :max="1" :step="0.01" :precision="3" :disabled="!form.faceQaEnabled" /></el-form-item>
             <el-form-item label="露骨成人模式"><el-switch v-model="form.adultExplicit" activeText="生图、视频和分镜均使用明确成人表达" /></el-form-item>
             <el-form-item label="人物身份锁定"><el-switch v-model="form.characterLock" activeText="固定脸型、发型、体型与标志特征" /></el-form-item>
             <el-form-item label="全片连续模式"><el-switch v-model="form.continuousShots" activeText="上一镜尾帧作为下一镜首帧" /></el-form-item>
@@ -76,7 +78,7 @@
           <el-button text @click="openSettings">配置模型</el-button>
         </div>
         <p v-if="modelError || validationError" class="errorText" role="alert">{{ modelError || validationError }}</p>
-        <p class="costNotice">预计 {{ form.shotCount * form.duration }} 秒{{ form.stitch ? '，合成后按目标时长精确裁切' : '' }}；图片至少 {{ form.characterCount + form.sceneCount + form.shotCount }} 张；视频首轮 {{ form.shotCount }} 段。<template v-if="form.productionMode === 'long'">首轮估算 {{ firstPassCost }} USD，全部重试上限估算 {{ retryCost }} USD，实际提交受 {{ form.costLimit || '不限' }} USD 预算约束。</template> 生成按供应商实际规则计费。</p>
+        <p class="costNotice">预计 {{ form.shotCount * form.duration }} 秒{{ form.stitch ? '，合成后按目标时长精确裁切' : '' }}；图片至少 {{ form.characterCount + form.sceneCount + form.shotCount }} 张；视频首轮 {{ form.shotCount }} 段；图片并发 {{ form.imageConcurrency }}，视频并发 {{ form.videoConcurrency }}。<template v-if="form.productionMode === 'long'">首轮估算 {{ firstPassCost }} USD，全部重试上限估算 {{ retryCost }} USD，实际提交受 {{ form.costLimit || '不限' }} USD 预算约束。</template> 生成按供应商实际规则计费。</p>
         <div class="actions">
           <el-button v-if="newVersion" :disabled="busy" @click="newVersion = false">返回当前进度</el-button>
           <el-button type="primary" size="large" :loading="busy" :disabled="!canStart" @click="startProduction">{{ run ? '新建一版并开始制作' : '开始一键制作' }}</el-button>
@@ -85,7 +87,7 @@
       <template v-else-if="run">
         <div class="progressHeading"><strong>{{ run.plan?.title || (run.config.productionMode === 'long' ? '正在构建全片圣经与分场剧本' : '正在编写完整剧本') }}</strong><span>{{ statusLabels[run.status] }} · {{ completedCount }}/{{ run.tasks.length }} 步</span></div>
         <el-progress :percentage="progress" :status="run.status === 'completed' ? 'success' : run.status === 'failed' ? 'exception' : undefined" />
-        <p class="runSummary">{{ run.config.productionMode === 'long' ? `${run.config.targetDurationMinutes} 分钟长片 · ${run.config.sceneCount} 场` : '短片' }} · {{ run.config.characterCount }} 个角色 · {{ run.config.shotCount }} 个镜头 · {{ run.config.ratio }} · 每镜 {{ run.config.duration }} 秒 · {{ run.config.characterLock ? '人物锁定' : '普通身份一致' }} · {{ run.config.continuousShots ? '尾帧连续' : '独立首帧' }} · {{ run.config.adultExplicit ? '露骨成人' : '常规内容' }} · 语言模型 {{ run.config.language.modelId }}<template v-if="run.config.productionMode === 'long'"> · 视频估算已用 {{ run.estimatedCost || 0 }} / {{ run.config.costLimit || '不限' }} USD</template></p>
+        <p class="runSummary">{{ run.config.productionMode === 'long' ? `${run.config.targetDurationMinutes} 分钟长片 · ${run.config.sceneCount} 场` : '短片' }} · {{ run.config.characterCount }} 个角色 · {{ run.config.shotCount }} 个镜头 · {{ run.config.ratio }} · 每镜 {{ run.config.duration }} 秒 · {{ run.config.characterLock ? '人物锁定' : '普通身份一致' }} · {{ run.config.continuousShots ? '同场尾帧连续' : '身份分镜首帧' }} · 图片并发 {{ run.config.imageConcurrency }} / 视频并发 {{ run.config.videoConcurrency }} · {{ run.config.adultExplicit ? '露骨成人' : '常规内容' }} · 语言模型 {{ run.config.language.modelId }}<template v-if="run.config.productionMode === 'long'"> · 视频估算已用 {{ run.estimatedCost || 0 }} / {{ run.config.costLimit || '不限' }} USD</template></p>
         <p v-if="run.status === 'pausing'" class="runSummary">当前请求完成并保存后暂停。</p>
         <div v-if="run.error" class="errorBox" role="alert">{{ run.error }}</div>
         <div class="actions">
@@ -141,8 +143,8 @@ type ProductionForm = Omit<OriginalConfig, "language" | "image" | "video">;
 const form = reactive<ProductionForm>({
   productionMode: "short", brief: props.brief, style: "电影写实", characterCount: 3, shotCount: 6,
   targetDurationMinutes: 10, sceneCount: 1, maxRetries: 0, costLimit: 0, costPerVideo: 2.01,
-  faceQaEnabled: false, faceThreshold: 0.363, ratio: "16:9", duration: 15, resolution: "", stitch: true,
-  adultExplicit: false, characterLock: true, continuousShots: true,
+  faceQaEnabled: false, faceThreshold: 0.363, ratio: "9:16", duration: 15, resolution: "", stitch: true,
+  adultExplicit: false, characterLock: true, continuousShots: false, imageConcurrency: 3, videoConcurrency: 2,
 });
 const statusLabels = { running: "进行中", pausing: "等待暂停", paused: "已暂停", failed: "执行失败", completed: "已完成", interrupted: "服务中断，待恢复" };
 const taskLabels = { pending: "待执行", running: "进行中", completed: "已完成", failed: "失败" };
@@ -237,13 +239,14 @@ function selection(value: string) {
   return { providerId, modelId };
 }
 
-function applyAdult90Preset() {
+function applyAdult120Preset() {
   Object.assign(form, {
     productionMode: "short",
     style: "原创虚构韩国成年人，现代韩国人物造型与环境细节，不仿照真实人物；成熟二次元成人动画，电影级柔光，稳定一致的角色设计，连贯空间与镜头语言",
-    characterCount: 3, shotCount: 6, ratio: "16:9", duration: 15, stitch: true,
-    targetDurationMinutes: 10, sceneCount: 1, maxRetries: 0, costLimit: 0, costPerVideo: 2.01,
-    faceQaEnabled: false, faceThreshold: 0.363, adultExplicit: true, characterLock: true, continuousShots: true,
+    characterCount: 3, shotCount: 8, ratio: "9:16", duration: 15, stitch: true,
+    targetDurationMinutes: 10, sceneCount: 1, maxRetries: 2, costLimit: 0, costPerVideo: 2.01,
+    faceQaEnabled: true, faceThreshold: 0.363, adultExplicit: true, characterLock: true, continuousShots: false,
+    imageConcurrency: 3, videoConcurrency: 2,
   } satisfies Partial<ProductionForm>);
   selectAdultModels();
 }
@@ -267,8 +270,9 @@ function applyAdultLongPreset() {
     productionMode: "long",
     style: "原创虚构韩国成年人，现代韩国人物造型与环境细节，不仿照真实人物；成熟二次元成人动画，电影级柔光，固定角色设计，分场连续的专业长片镜头语言",
     characterCount: 3, shotCount: 40, targetDurationMinutes: 10, sceneCount: 8,
-    ratio: "16:9", duration: 15, stitch: true, maxRetries: 2, costLimit: 150, costPerVideo: 2.01,
+    ratio: "9:16", duration: 15, stitch: true, maxRetries: 2, costLimit: 150, costPerVideo: 2.01,
     faceQaEnabled: true, faceThreshold: 0.363, adultExplicit: true, characterLock: true, continuousShots: true,
+    imageConcurrency: 3, videoConcurrency: 2,
   } satisfies Partial<ProductionForm>);
   selectAdultModels();
 }
