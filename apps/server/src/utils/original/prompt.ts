@@ -21,8 +21,8 @@ export function timingInstruction(config: OriginalConfig, startShot = 0) {
 
 function ratioInstruction(config: OriginalConfig) {
   return config.ratio === "9:16"
-    ? "严格竖屏 9:16 构图；主体沿纵向安排，关键脸部与本镜动作主体处于安全区，不生成横屏画面、横屏黑边或旋转画面。"
-    : `严格 ${config.ratio} 构图，不改变方向或增加黑边。`;
+    ? "系统画幅锁定为竖屏 9:16，后文或原始需求中的任何冲突画幅均无效；主体沿纵向安排，关键脸部与本镜动作主体处于安全区，不生成横屏画面、横屏黑边或旋转画面。"
+    : `系统画幅锁定为 ${config.ratio}，后文或原始需求中的任何冲突画幅均无效；不改变方向或增加黑边。`;
 }
 
 function identityLines(plan: OriginalPlan, shot: Shot) {
