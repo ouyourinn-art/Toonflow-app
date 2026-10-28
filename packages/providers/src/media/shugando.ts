@@ -46,6 +46,23 @@ async function multipart(context: ProviderContext, fields: Record<string, string
   return { body: new Blob(parts), contentType: `multipart/form-data; boundary=${boundary}` };
 }
 
+async function referenceUrl(context: ProviderContext<ProviderConfig<typeof rules>>, input: MediaInput, signal: AbortSignal) {
+  if (input.type === "url") {
+    const url = new URL(input.url);
+    if (url.protocol !== "https:" || url.username || url.password || url.hash) throw new Error("参考图必须是 HTTPS 图片地址");
+    return url.href;
+  }
+  if (!context.config.uploadUrl || !context.config.uploadUser || !context.config.uploadToken) throw new Error("开白图片参考需要配置参考图上传地址、用户名与令牌");
+  const response = await context.tool.fetch(endpoint(context.config.uploadUrl), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${context.config.uploadToken}`, "X-Username": context.config.uploadUser, "Content-Type": input.mimeType },
+    body: await bytes(context, input, signal), signal,
+  });
+  const result = await json(context, response, "参考图上传");
+  if (typeof result.url !== "string" || !/^https:\/\//.test(result.url)) throw new Error("上传服务未返回 HTTPS 参考图地址");
+  return result.url;
+}
+
 function wait(signal: AbortSignal) {
   signal.throwIfAborted();
   return new Promise<void>((resolve, reject) => {
@@ -60,28 +77,32 @@ export default {
   label: "Shugando",
   icon: "",
   version: "1.0.0",
-  readme: "使用现有 Shugando 网关 Key。图片参考通过 multipart 编辑接口提交；视频首帧需配置已登录媒体服务的上传地址、用户名与令牌。视频仅提交一次，随后查询同一任务；错误显示任务编号供核对。",
+  readme: "使用现有 Shugando 网关 Key。GPT Image 参考图通过 multipart 编辑接口提交；Seedream 开白模型先上传参考图，再以 HTTPS 地址调用 JSON 编辑接口。视频首帧同样使用已登录媒体服务。视频仅提交一次，随后查询同一任务；错误显示任务编号供核对。",
   rules,
   models: [
     { id: "gpt-image-2.5", label: "GPT Image 2.5", type: "image", mode: ["text", "singleImage", "multiReference"], imageSizes: ["1K"], imageRatios: ["16:9", "9:16", "1:1", "4:3", "3:4"] },
+    { id: "seedream-5.0-white", label: "Seedream 5.0 开白", type: "image", mode: ["text", "singleImage", "multiReference"], imageSizes: ["1K"], imageRatios: ["16:9", "9:16", "1:1", "4:3", "3:4"] },
+    { id: "Dola-Seedream-5.0-Pro-white", label: "Dola Seedream 5.0 Pro 开白", type: "image", mode: ["text", "singleImage", "multiReference"], imageSizes: ["1K"], imageRatios: ["16:9", "9:16", "1:1", "4:3", "3:4"] },
     { id: "seedance-2.0-white", label: "Seedance 2.0", type: "video", mode: ["text", "startFrameOptional"], durationResolutionMap: [{ duration: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], resolution: ["480p", "720p", "1080p"] }] },
   ] satisfies ProviderModel[],
   async generateImage(request: ImageRequest): Promise<MediaAsset[]> {
     const apiKey = this.config.apiKey.trim();
     if (!apiKey) throw new Error("请填写 Shugando API Key");
-    if (request.model !== "gpt-image-2.5") throw new Error("此适配器尚未接入所选图片模型");
+    if (!["gpt-image-2.5", "seedream-5.0-white", "Dola-Seedream-5.0-Pro-white"].includes(request.model)) throw new Error("此适配器尚未接入所选图片模型");
     const sizes: Record<string, string> = { "16:9": "1792x1024", "9:16": "1024x1792", "1:1": "1024x1024", "4:3": "1344x1024", "3:4": "1024x1344" };
     const size = sizes[request.ratio || "1:1"];
     if (!size || request.size && request.size !== "1K") throw new Error("图片画幅或尺寸不受支持");
     if (request.mask || (request.n ?? 1) !== 1) throw new Error("当前连接仅支持单张无蒙版生成");
     const images = request.images ?? [];
-    if (images.length > 4) throw new Error("Shugando GPT Image 最多支持 4 张参考图");
+    if (images.length > 4) throw new Error("Shugando 图片模型最多支持 4 张参考图");
     const signal = AbortSignal.any([AbortSignal.timeout(15 * 60_000), ...(this.signal ? [this.signal] : [])]);
     const fields = { model: request.model, prompt: request.prompt, size, n: "1", response_format: "url" };
-    const form = images.length ? await multipart(this, fields, images, signal) : undefined;
+    const whiteSeedream = request.model === "seedream-5.0-white" || request.model === "Dola-Seedream-5.0-Pro-white";
+    const urls = images.length && whiteSeedream ? await Promise.all(images.map(input => referenceUrl(this, input, signal))) : [];
+    const form = images.length && !whiteSeedream ? await multipart(this, fields, images, signal) : undefined;
     const response = await this.tool.fetch(`${endpoint(this.config.baseUrl)}/images/${images.length ? "edits" : "generations"}`, {
       method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": form?.contentType ?? "application/json" },
-      body: form?.body ?? JSON.stringify({ ...fields, n: 1 }), signal,
+      body: form?.body ?? JSON.stringify(urls.length ? { ...fields, n: 1, image: urls[0], images: urls, image_urls: urls } : { ...fields, n: 1 }), signal,
     });
     const result = await json(this, response, "图片生成");
     if (!Array.isArray(result.data) || result.data.length !== 1) throw new Error("图片接口未返回唯一结果");

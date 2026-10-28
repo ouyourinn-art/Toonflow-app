@@ -405,7 +405,7 @@ async function execute(cwd: string, control: Control, models: Awaited<ReturnType
           request.duration = config.duration;
           request.resolution = config.resolution;
           request.mode = videoMode(model);
-          let referenceMedia = references[0]!;
+          let referenceMedia = references[0];
           if (config.continuousShots) {
             const videoTasks = state.tasks.filter(item => item.kind === "video");
             const videoIndex = videoTasks.indexOf(task);
@@ -416,11 +416,16 @@ async function execute(cwd: string, control: Control, models: Awaited<ReturnType
               referenceMedia = await extractLastFrame(cwd, state, previous, task.id.slice("video:".length));
             }
           }
-          task.referenceFrame = referenceMedia.path;
-          await save(cwd, control);
-          const reference = { path: referenceMedia.path, mimeType: referenceMedia.mimeType };
-          if (Array.isArray(request.mode) || request.mode === "singleImage") request.images = [reference];
-          else request.firstFrame = reference;
+          if (referenceMedia) {
+            task.referenceFrame = referenceMedia.path;
+            await save(cwd, control);
+            const reference = { path: referenceMedia.path, mimeType: referenceMedia.mimeType };
+            if (Array.isArray(request.mode) || request.mode === "singleImage") request.images = [reference];
+            else request.firstFrame = reference;
+          } else {
+            delete task.referenceFrame;
+            await save(cwd, control);
+          }
           if (model.audio === "optional") request.generateAudio = true;
         } else {
           request.size = model.imageSizes?.[0];

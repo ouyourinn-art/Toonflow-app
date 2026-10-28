@@ -256,7 +256,9 @@ function selectAdultModels() {
     const choices = video.durationResolutionMap?.filter(item => item.duration.includes(15)).flatMap(item => item.resolution) ?? [];
     form.resolution = choices.includes("480p") ? "480p" : choices[0] ?? "";
   }
-  const image = imageModels.value.find(model => /gpt[-_. ]?image[-_. ]?2\.5/i.test(`${model.modelId} ${model.label}`));
+  const image = imageModels.value.find(model => model.modelId.trim().toLowerCase() === "seedream-5.0-white")
+    ?? imageModels.value.find(model => /seedream[-_. ]?5\.0.*white/i.test(`${model.modelId} ${model.label}`))
+    ?? imageModels.value.find(model => /gpt[-_. ]?image[-_. ]?2\.5/i.test(`${model.modelId} ${model.label}`));
   if (image) imageValue.value = modelValue(image);
 }
 
