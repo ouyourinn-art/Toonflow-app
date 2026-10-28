@@ -9,7 +9,7 @@
       <template v-if="editing">
         <div class="presetGrid">
           <div class="presetBar">
-            <div><strong>韩国成人露骨 2 分钟竖屏短片</strong><span>原创虚构韩国成年人，8 镜 × 15 秒，人物母版锁定，图片 3 路、视频 2 路并发。</span></div>
+            <div><strong>韩国成人露骨 2 分钟竖屏短片</strong><span>原创虚构韩国成年人，8 镜 × 15 秒，人物母版锁定，图片 6 路、视频 4 路并发。</span></div>
             <el-button type="danger" size="large" :disabled="busy || !statusReady" @click="applyAdult120Preset">套用 2 分钟</el-button>
           </div>
           <div class="presetBar longPreset">
@@ -52,12 +52,12 @@
               <el-form-item label="视频预算上限（USD）"><el-input-number v-model="form.costLimit" :min="0" :max="100000" :step="10" :precision="2" /></el-form-item>
               <el-form-item label="单段视频估算（USD）"><el-input-number v-model="form.costPerVideo" :min="0.01" :max="10000" :step="0.01" :precision="2" /></el-form-item>
             </template>
-            <el-form-item label="图片并发数"><el-input-number v-model="form.imageConcurrency" :min="1" :max="8" :precision="0" /></el-form-item>
-            <el-form-item label="视频并发数"><el-input-number v-model="form.videoConcurrency" :min="1" :max="4" :precision="0" /></el-form-item>
+            <el-form-item label="图片并发数"><el-input-number v-model="form.imageConcurrency" :min="1" :max="12" :precision="0" /></el-form-item>
+            <el-form-item label="视频并发数"><el-input-number v-model="form.videoConcurrency" :min="1" :max="8" :precision="0" /></el-form-item>
             <el-form-item label="人物一致性质检"><el-switch v-model="form.faceQaEnabled" activeText="YuNet + SFace 抽帧验脸" /></el-form-item>
             <el-form-item label="同人脸阈值"><el-input-number v-model="form.faceThreshold" :min="-1" :max="1" :step="0.01" :precision="3" :disabled="!form.faceQaEnabled" /></el-form-item>
             <el-form-item label="露骨成人模式"><el-switch v-model="form.adultExplicit" activeText="生图、视频和分镜均使用明确成人表达" /></el-form-item>
-            <el-form-item label="人物身份锁定"><el-switch v-model="form.characterLock" activeText="固定脸型、发型、体型与标志特征" /></el-form-item>
+            <el-form-item label="人物身份锁定"><el-switch v-model="form.characterLock" activeText="人物母版参考 + 区域绑定 + 验脸纠偏" /></el-form-item>
             <el-form-item label="全片连续模式"><el-switch v-model="form.continuousShots" activeText="上一镜尾帧作为下一镜首帧" /></el-form-item>
             <el-form-item label="画幅">
               <el-select v-model="form.ratio"><el-option v-for="ratio in ratios" :key="ratio" :value="ratio" :label="ratio" /></el-select>
@@ -72,6 +72,7 @@
           </div>
         </el-form>
         <p v-if="form.adultExplicit" class="adultNotice">成人模式仅构建 25 岁以上、原创虚构、清醒且自愿的角色。系统会发送无遮挡的明确提示词；最终画面仍可能被所选上游模型自行弱化。</p>
+        <p class="runSummary">锁脸说明：当前使用人物母版优先参考、多人区域绑定、严格人数约束与 YuNet + SFace 后验重试；并非上游底层 FaceID / PuLID 硬锁。同一连续镜头链会串行以保持动作衔接，其余场景按设定并发。</p>
         <div class="modelHelp">
           <span>语言、图片与视频分别调用所选供应商；语言 Key 不会自动用于媒体服务。</span>
           <el-button text :loading="loadingModels" @click="loadModels">刷新模型列表</el-button>
@@ -144,7 +145,7 @@ const form = reactive<ProductionForm>({
   productionMode: "short", brief: props.brief, style: "电影写实", characterCount: 3, shotCount: 6,
   targetDurationMinutes: 10, sceneCount: 1, maxRetries: 0, costLimit: 0, costPerVideo: 2.01,
   faceQaEnabled: false, faceThreshold: 0.363, ratio: "9:16", duration: 15, resolution: "", stitch: true,
-  adultExplicit: false, characterLock: true, continuousShots: false, imageConcurrency: 3, videoConcurrency: 2,
+  adultExplicit: false, characterLock: true, continuousShots: false, imageConcurrency: 6, videoConcurrency: 4,
 });
 const statusLabels = { running: "进行中", pausing: "等待暂停", paused: "已暂停", failed: "执行失败", completed: "已完成", interrupted: "服务中断，待恢复" };
 const taskLabels = { pending: "待执行", running: "进行中", completed: "已完成", failed: "失败" };
@@ -246,7 +247,7 @@ function applyAdult120Preset() {
     characterCount: 3, shotCount: 8, ratio: "9:16", duration: 15, stitch: true,
     targetDurationMinutes: 10, sceneCount: 1, maxRetries: 2, costLimit: 0, costPerVideo: 2.01,
     faceQaEnabled: true, faceThreshold: 0.363, adultExplicit: true, characterLock: true, continuousShots: false,
-    imageConcurrency: 3, videoConcurrency: 2,
+    imageConcurrency: 6, videoConcurrency: 4,
   } satisfies Partial<ProductionForm>);
   selectAdultModels();
 }
@@ -272,7 +273,7 @@ function applyAdultLongPreset() {
     characterCount: 3, shotCount: 40, targetDurationMinutes: 10, sceneCount: 8,
     ratio: "9:16", duration: 15, stitch: true, maxRetries: 2, costLimit: 150, costPerVideo: 2.01,
     faceQaEnabled: true, faceThreshold: 0.363, adultExplicit: true, characterLock: true, continuousShots: true,
-    imageConcurrency: 3, videoConcurrency: 2,
+    imageConcurrency: 6, videoConcurrency: 4,
   } satisfies Partial<ProductionForm>);
   selectAdultModels();
 }

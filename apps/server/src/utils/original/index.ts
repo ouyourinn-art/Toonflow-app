@@ -11,7 +11,7 @@ import { lockWorkspaceFiles, resolveWorkspacePath, writeWorkspaceFile } from "@/
 import { inspectVideoFaces, prepareFaceQa } from "./faceQa";
 import { buildLongBiblePrompt, buildLongMediaTasks, buildLongScenePrompt, composeLongPlan, validateLongBible, validateLongScene } from "./longProduction";
 import { longBibleSchema, longScenePlanSchema, type LongScenePlan } from "./longTypes";
-import { adultDirection, buildAssetPrompt, buildImagePrompt, buildVideoPrompt, faceQaApplicable, storyArcInstruction, timingInstruction } from "./prompt";
+import { adultDirection, buildAssetPrompt, buildFaceCorrectionPrompt, buildImagePrompt, buildVideoPrompt, explicitStartShot, faceQaApplicable, storyArcInstruction, storyBeatOrder, timingInstruction } from "./prompt";
 import { originalPlanSchema, originalRunSchema, type OriginalConfig, type OriginalPlan, type OriginalRun, type OriginalTask } from "./types";
 
 type Control = { state: OriginalRun; pause: boolean; saving: Promise<void> };
@@ -126,10 +126,26 @@ function validatePlan(plan: OriginalPlan, config: OriginalConfig) {
     const layoutIds = layout.map(item => item.characterId);
     if (layoutIds.length !== shot.characterIds.length || new Set(layoutIds).size !== layoutIds.length || layoutIds.some(id => !shot.characterIds.includes(id)) || new Set(layout.map(item => item.screenRegion)).size !== layout.length) fail(`分镜 ${shot.id} 的人物区域未与实际出场角色一一绑定`);
   }
-  const requiredBeats = config.adultExplicit ? ["setup", "consent", "escalation", "explicitAction", "climax", "aftermath"] : ["setup", "escalation", "climax", "aftermath"];
+  const requiredBeats = storyBeatOrder(config);
   const beats = new Set(plan.shots.map(shot => shot.storyBeat));
-  const missingBeats = requiredBeats.filter(beat => !beats.has(beat as NonNullable<OriginalPlan["shots"][number]["storyBeat"]>));
+  const missingBeats = requiredBeats.filter(beat => !beats.has(beat));
   if (missingBeats.length) fail(`完整剧情缺少必要节拍：${missingBeats.join("、")}`);
+  const beatOrder = storyBeatOrder(config);
+  let previousBeat = -1;
+  for (const [index, shot] of plan.shots.entries()) {
+    const currentBeat = beatOrder.indexOf(shot.storyBeat!);
+    if (currentBeat < 0) fail(`分镜 ${shot.id} 使用了当前模式不允许的剧情节拍：${shot.storyBeat}`);
+    if (currentBeat < previousBeat) fail(`分镜 ${shot.id} 的剧情节拍倒退；必须按 ${beatOrder.join(" → ")} 推进`);
+    previousBeat = currentBeat;
+    if (config.adultExplicit && index < explicitStartShot(config) && shot.storyBeat === "explicitAction") fail(`分镜 ${shot.id} 过早进入明确成人动作；前 ${explicitStartShot(config)} 镜必须先完成铺垫与明确同意`);
+  }
+  for (const [index, beat] of beatOrder.entries()) {
+    const first = plan.shots.findIndex(shot => shot.storyBeat === beat);
+    const previous = index > 0 ? plan.shots.findIndex(shot => shot.storyBeat === beatOrder[index - 1]) : -1;
+    if (index > 0 && first <= previous) fail(`剧情节拍顺序错误：${beatOrder.join(" → ")}`);
+  }
+  if (config.adultExplicit && plan.shots.findIndex(shot => shot.storyBeat === "explicitAction") !== explicitStartShot(config)) fail(`明确成人动作必须从第 ${explicitStartShot(config) + 1} 镜开始，使铺垫按单镜粒度控制在开头约 15%`);
+  if (plan.shots.at(-1)?.storyBeat !== "aftermath") fail("最后一镜必须是 aftermath，完成剧情收束");
   if (config.adultExplicit) {
     const text = plan.shots.map(shot => `${shot.shotPurpose} ${shot.framing} ${shot.action} ${shot.imagePrompt} ${shot.videoPrompt}`).join("\n");
     if (!/(生殖器|阴茎|阴道|外阴|genital).{0,40}(特写|近景|close[ -]?up)|(特写|近景|close[ -]?up).{0,40}(生殖器|阴茎|阴道|外阴|genital)/i.test(text)) fail("露骨成人剧情缺少无遮挡的生殖器细节特写");
@@ -236,7 +252,8 @@ async function planLongScene(cwd: string, state: OriginalRun, task: OriginalTask
   const previous = sceneIndex > 0 ? scenePlans[bible.scenes[sceneIndex - 1]!.id] : undefined;
   if (sceneIndex > 0 && !previous) fail("上一场尚未完成，不能展开当前分场");
   const startShot = bible.scenes.slice(0, sceneIndex).reduce((total, item) => total + item.shotCount, 0);
-  const prompt = buildLongScenePrompt(state.config, bible, scene, startShot, previous?.shots.at(-1)?.endState);
+  const previousBeat = previous?.shots.at(-1)?.storyBeat;
+  const prompt = buildLongScenePrompt(state.config, bible, scene, startShot, previous?.shots.at(-1)?.endState, previousBeat);
   task.prompt = prompt;
   await write(cwd, `${runDirectory(state)}/scenePrompts/${scene.id}.txt`, prompt);
   const text = await languageResponse(state, prompt);
@@ -250,7 +267,7 @@ async function planLongScene(cwd: string, state: OriginalRun, task: OriginalTask
   for (let index = 1; index < plan.shots.length; index++) plan.shots[index]!.startState = plan.shots[index - 1]!.endState;
   plan.shots.at(-1)!.endState = scene.endState;
   const usedShotIds = new Set(Object.values(scenePlans).flatMap(item => item.shots.map(shot => shot.id)));
-  validateLongScene(plan, bible, scene, usedShotIds, state.config);
+  validateLongScene(plan, bible, scene, usedShotIds, state.config, previousBeat);
   scenePlans[scene.id] = plan;
   state.scenePlans = scenePlans;
   await write(cwd, `${runDirectory(state)}/scenes/${scene.id}.json`, JSON.stringify(plan, null, 2));
@@ -419,10 +436,15 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
     if (!result.passed) {
       const attempts = videoTask.attempts ?? 1;
       if (attempts > state.config.maxRetries) fail(`人物一致性质检未通过，已用完 ${state.config.maxRetries} 次重试：${result.reasons.join("；")}`);
+      const shotId = videoTask.id.slice("video:".length);
+      const shot = state.plan?.shots.find(item => item.id === shotId) ?? fail(`人物一致性质检找不到分镜：${shotId}`);
+      const correctionMarker = "\n\n【人物身份纠偏重试】";
+      videoTask.prompt = `${videoTask.prompt?.split(correctionMarker)[0] ?? buildVideoPrompt(state.plan!, shot, state.config)}${buildFaceCorrectionPrompt(state.plan!, shot, attempts, result.reasons)}`;
       task.status = "pending";
       videoTask.status = "pending";
       delete videoTask.files;
       delete videoTask.referenceFrame;
+      delete task.qa;
       return;
     }
   } else {

@@ -22,8 +22,8 @@ export const originalConfigSchema = z.strictObject({
   adultExplicit: z.boolean().default(false),
   characterLock: z.boolean().default(true),
   continuousShots: z.boolean().default(false),
-  imageConcurrency: z.number().int().min(1).max(8).default(3),
-  videoConcurrency: z.number().int().min(1).max(4).default(2),
+  imageConcurrency: z.number().int().min(1).max(12).default(6),
+  videoConcurrency: z.number().int().min(1).max(8).default(4),
 });
 
 const identifier = z.string().regex(/^[a-z][a-zA-Z0-9]{0,63}$/);

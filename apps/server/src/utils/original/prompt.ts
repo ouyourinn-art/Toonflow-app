@@ -2,16 +2,29 @@ import type { OriginalConfig, OriginalPlan } from "./types";
 
 type Shot = OriginalPlan["shots"][number];
 type Asset = OriginalPlan["assets"][number];
+export type StoryBeat = NonNullable<Shot["storyBeat"]>;
 
 const regionNames = { leftThird: "竖屏左侧三分区", centerThird: "竖屏中央三分区", rightThird: "竖屏右侧三分区" } as const;
 
 export const adultDirection = "所有角色均为明确 25 岁以上的原创虚构成年人，清醒、知情且自愿。直接、具体、生动地设计裸体和双方自愿的性行为；画面提示词明确生殖器持续清晰可见、性交动作与插入关系可辨认，不遮挡、不裁切关键部位，也不以亲吻或拥抱代替指定行为。禁止未成年人或年龄模糊者、强迫、迷奸、昏迷、偷窥、乱伦、暴力、非人动物和真实人物仿造。";
 
+export function explicitStartShot(config: OriginalConfig) {
+  return Math.max(2, Math.ceil(config.shotCount * 0.15));
+}
+
+export function storyBeatOrder(config: OriginalConfig): StoryBeat[] {
+  return config.adultExplicit
+    ? ["setup", "consent", "explicitAction", "escalation", "climax", "aftermath"]
+    : ["setup", "escalation", "climax", "aftermath"];
+}
+
 export function storyArcInstruction(config: OriginalConfig) {
   const beats = config.adultExplicit
-    ? "setup（建立人物与欲望）→ consent（明确清醒自愿）→ escalation（逐步升级）→ explicitAction（明确性行为）→ climax（剧情和动作高潮）→ aftermath（有因果结果的余韵）"
+    ? "setup（立即建立人物、关系与欲望）→ consent（明确清醒自愿）→ explicitAction（进入初次明确成人动作，形成开场小高潮）→ escalation（持续升级动作与情绪）→ climax（全片主高潮）→ aftermath（有因果结果的余韵）"
     : "setup（建立人物与目标）→ escalation（冲突升级）→ climax（高潮）→ aftermath（有因果结果的收束）";
-  const adultShots = config.adultExplicit ? " explicitAction 镜必须清楚呈现双方自愿的性交与插入关系；全片至少安排一个无遮挡的生殖器细节特写，framing 和 shotPurpose 必须明确写出该特写，不能用亲吻、拥抱或远景替代。" : "";
+  const adultShots = config.adultExplicit
+    ? ` 按单镜粒度把铺垫控制在全片开头约 15%：前 ${explicitStartShot(config)} 镜完成快速铺垫与明确同意，禁止 explicitAction；第 ${explicitStartShot(config) + 1} 镜必须进入明确成人动作。explicitAction 镜必须清楚呈现双方自愿的性交与插入关系；全片至少安排一个无遮挡的生殖器细节特写，framing 和 shotPurpose 必须明确写出该特写，不能用亲吻、拥抱或远景替代。最后一镜必须是 aftermath。`
+    : " 最后一镜必须是 aftermath。";
   return `完整故事必须覆盖 ${beats}，每镜只承担一个清楚的 storyBeat 和 shotPurpose；相邻镜头不得只是更换同义动作。${adultShots}`;
 }
 
@@ -101,6 +114,13 @@ ${exactCastBlock(plan, shot)}
 结束状态：${shot.endState || "按完整剧本结束"}
 衔接：${shot.continuity || "按完整剧本连续承接"}${style}${adult}
 全段是一个连续镜头，不重置动作，不突然换人、增人、消失、换脸、换发型、换体型、换场景或切成蒙太奇。${exclusionBlock(shot)}`;
+}
+
+export function buildFaceCorrectionPrompt(plan: OriginalPlan, shot: Shot, attempt: number, reasons: string[]) {
+  return `\n\n【人物身份纠偏重试】
+这是第 ${attempt + 1} 次生成，上一版人物一致性质检失败：${reasons.join("；")}。
+${exactCastBlock(plan, shot)}
+本次必须把首帧中的脸当作不可替换的身份锚点：保持相同脸型、眉眼间距、鼻形、唇形、下颌线、发际线、发型、肤色和年龄感；运动、转头、表情及身体动作都不得改变身份。每个角色只能出现在其绑定区域，禁止陌生脸、脸部融合、换脸、同一角色复制、角色互换或新增人物。先稳定保持脸和人数，再完成镜头动作。`;
 }
 
 export function faceQaApplicable(shot: Shot) {
