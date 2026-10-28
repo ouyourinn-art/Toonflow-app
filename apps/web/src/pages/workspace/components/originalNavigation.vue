@@ -1,10 +1,13 @@
 <template>
   <section v-if="project || loadError" class="originalNavigation" aria-label="原创制作流程">
     <template v-if="project">
-      <div class="workflowHeading"><strong>{{ project.mode === 'adaptation' ? '小说改编' : '原创短剧' }}</strong><span>阶段画布 · 内容自动保存</span></div>
+      <div class="workflowHeading">
+        <strong>{{ project.mode === 'adaptation' ? '小说改编' : '原创短剧' }}</strong><span>阶段画布 · 内容自动保存</span>
+        <originalProduction :key="directory" :directory="directory" :brief="project.brief" :ready="ready" :activate="activate" @update="production = $event" @openSettings="emit('openSettings')" />
+      </div>
       <nav class="stageList" aria-label="制作阶段">
-        <button v-for="(stage, index) in originalStages" :key="stage.id" class="stageButton" :class="{ active: currentCanvas === stage.file }" type="button" :aria-current="currentCanvas === stage.file ? 'step' : undefined" :disabled="!ready || !!opening" :title="stage.brief" @click="openStage(stage.file)">
-          <span>{{ index + 1 }}</span>{{ stage.label }}
+        <button v-for="(stage, index) in originalStages" :key="stage.id" class="stageButton" :class="{ active: currentCanvas === stageFile(stage.id, stage.file), completed: !!production?.canvases[stage.id] }" type="button" :aria-current="currentCanvas === stageFile(stage.id, stage.file) ? 'step' : undefined" :disabled="!ready || !!opening" :title="stage.brief" @click="openStage(stageFile(stage.id, stage.file))">
+          <span>{{ production?.canvases[stage.id] ? '✓' : index + 1 }}</span>{{ stage.label }}
         </button>
       </nav>
     </template>
@@ -18,9 +21,13 @@ import axios from "axios";
 import { ElMessage } from "element-plus";
 import { originalStages, type OriginalProject } from "@/lib/originalWorkflow";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
+import type { OriginalRun } from "@toonflow/server/original";
+import originalProduction from "./originalProduction.vue";
 
 const props = defineProps<{ directory: string; currentCanvas: string; ready: boolean; activate: (file: string) => Promise<void> }>();
+const emit = defineEmits<{ openSettings: [] }>();
 const project = ref<OriginalProject>();
+const production = ref<OriginalRun | null>(null);
 const loadError = ref("");
 const opening = ref("");
 let request: AbortController | undefined;
@@ -29,6 +36,7 @@ async function loadProject() {
   request?.abort();
   const controller = request = new AbortController();
   project.value = undefined;
+  production.value = null;
   loadError.value = "";
   if (!props.directory) return;
   try {
@@ -42,6 +50,8 @@ async function loadProject() {
     if (!controller.signal.aborted) loadError.value = axios.isAxiosError(error) ? error.response?.data?.message || "原创项目配置读取失败" : error instanceof Error ? error.message : "原创项目配置读取失败";
   }
 }
+
+const stageFile = (stage: string, fallback: string) => production.value?.canvases[stage] || fallback;
 
 async function openStage(file: string) {
   if (opening.value || !props.ready) return;
@@ -68,6 +78,7 @@ onScopeDispose(() => request?.abort());
     color: var(--el-text-color-regular); background: transparent; border: 1px solid transparent; border-radius: 6px; cursor: pointer;
     span { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--el-fill-color); }
     &.active { color: var(--el-color-primary); background: var(--el-color-primary-light-9); border-color: var(--el-color-primary); }
+    &.completed span { color: var(--el-color-success); }
     &:focus-visible { outline: 2px solid var(--el-color-primary); }
     &:disabled { cursor: wait; opacity: .6; }
   }

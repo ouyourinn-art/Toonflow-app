@@ -26,7 +26,7 @@
         :saveNode="saveDocumentNode" />
     </keep-alive>
     <workspaceMenu class="workspaceMenu" @openSettings="settingsVisible = true" />
-    <originalNavigation :directory="workspaceStore.project?.directory || ''" :currentCanvas="canvasPanelRef?.canvasId || ''" :ready="!!canvasPanelRef?.canvasListReady" :activate="openOriginalStage" />
+    <originalNavigation :directory="workspaceStore.project?.directory || ''" :currentCanvas="canvasPanelRef?.canvasId || ''" :ready="!!canvasPanelRef?.canvasListReady" :activate="openOriginalStage" @openSettings="settingsVisible = true" />
     <div class="workspaceTools">
       <el-segmented :modelValue="activePanel" class="panelSwitcher" :options="panelOptions" size="small" aria-label="切换面板" @change="switchPanel">
         <template #default="{ item }">

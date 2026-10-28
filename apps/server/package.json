@@ -10,6 +10,7 @@
     "./documentFormats": "./src/lib/documentFormats.ts",
     "./nodeMenu": "./src/lib/nodeMenu.ts",
     "./modelReasoning": "./src/lib/modelReasoning.ts",
+    "./original": "./src/utils/original/types.ts",
     "./mcp": "./src/utils/mcp/runtime.ts",
     "./mobileLink": "./src/utils/mobileLink/index.ts",
     "./browser": "./src/utils/browser/index.ts",
