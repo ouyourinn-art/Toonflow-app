@@ -31,12 +31,12 @@
               </el-select>
             </el-form-item>
             <el-form-item label="统一视觉风格"><el-input v-model="form.style" :maxlength="1000" placeholder="例如：电影写实、暖色自然光" /></el-form-item>
-            <el-form-item label="图片模型（文生图 + 多参考图）">
+            <el-form-item :label="form.adultExplicit ? '图片模型（Shugando 开白）' : '图片模型（文生图 + 多参考图）'">
               <el-select v-model="imageValue" filterable placeholder="选择人物、场景及分镜图片模型">
                 <el-option v-for="model in imageModels" :key="modelValue(model)" :value="modelValue(model)" :label="`${model.label} · ${model.providerLabel}`" />
               </el-select>
             </el-form-item>
-            <el-form-item label="视频模型（图生视频）">
+            <el-form-item :label="form.adultExplicit ? '视频模型（Shugando 开白）' : '视频模型（图生视频）'">
               <el-select v-model="videoValue" filterable placeholder="选择支持图片参考的视频模型">
                 <el-option v-for="model in videoModels" :key="modelValue(model)" :value="modelValue(model)" :label="`${model.label} · ${model.providerLabel}`" />
               </el-select>
@@ -77,7 +77,7 @@
             <el-form-item label="最终合成"><el-switch v-model="form.stitch" activeText="按镜头顺序自动合成 MP4" /></el-form-item>
           </div>
         </el-form>
-        <p v-if="form.adultExplicit" class="adultNotice">成人模式仅构建 25 岁以上、原创虚构、清醒且自愿的角色。系统会发送无遮挡的明确提示词；最终画面仍可能被所选上游模型自行弱化。</p>
+        <p v-if="form.adultExplicit" class="adultNotice">成人模式仅构建 25 岁以上、原创虚构、清醒且自愿的角色。资产图、分镜图和视频强制使用 Shugando 开白模型，不允许回落到普通媒体模型；系统会发送无遮挡的明确提示词。</p>
         <p class="runSummary">需求和视觉风格都可以直接修改。已有运行记录时，先点击「编辑需求与风格并新建一版」；修改只作用于新版本，旧剧本、素材和成片不会被覆盖。锁脸说明：当前使用人物母版优先参考、多人区域绑定、严格人数约束与 YuNet + SFace 后验重试；并非上游底层 FaceID / PuLID 硬锁。同一连续镜头链会串行以保持动作衔接，其余场景按设定并发。</p>
         <div class="modelHelp">
           <span>语言、图片与视频分别调用所选供应商；语言 Key 不会自动用于媒体服务。</span>
@@ -118,6 +118,11 @@
             <p v-if="task.referenceFrame" class="runSummary">实际视频首帧：{{ task.referenceFrame }}</p>
             <p v-if="task.attempts" class="runSummary">已提交 {{ task.attempts }} 次</p>
             <p v-if="task.qa" :class="task.qa.passed ? 'qaPassed' : 'errorText'">人脸 QA：{{ task.qa.passed ? '通过' : task.qa.reasons.join('；') }} · 抽帧 {{ task.qa.sampledFrames }} · 检出 {{ task.qa.detectedFrames }}</p>
+            <div v-if="task.imageQa" :class="task.imageQa.passed ? 'qaPassed' : 'errorBox'">
+              <strong>成人分镜图解剖 QA：{{ task.imageQa.passed ? '通过' : '未通过' }}</strong>
+              <p>解剖 {{ task.imageQa.anatomy }} / 连接 {{ task.imageQa.connection }} / 真实感 {{ task.imageQa.realism }} / 无遮挡 {{ task.imageQa.visibility }}</p>
+              <p v-if="task.imageQa.reasons.length">{{ task.imageQa.reasons.join('；') }}</p>
+            </div>
             <pre v-if="task.prompt" class="promptText">{{ task.prompt }}</pre>
             <div v-for="file in task.files" :key="file.path" class="resultFile">{{ file.path }}</div>
           </details>
@@ -178,8 +183,9 @@ const completedCount = computed(() => run.value?.tasks.filter(task => task.statu
 const progress = computed(() => run.value?.tasks.length ? Math.floor(completedCount.value / run.value.tasks.length * 100) : 0);
 const firstPassCost = computed(() => Number((form.shotCount * form.costPerVideo).toFixed(2)));
 const retryCost = computed(() => Number((form.shotCount * (form.maxRetries + 1) * form.costPerVideo).toFixed(2)));
-const imageModels = computed(() => models.value.filter(model => model.type === "image" && Array.isArray(model.mode) && model.mode.includes("text") && model.mode.includes("multiReference")));
-const videoModels = computed(() => models.value.filter(model => model.type === "video" && model.durationResolutionMap?.length && Array.isArray(model.mode) && model.mode.some(mode => ["singleImage", "startFrameOptional", "endFrameOptional"].includes(mode) || Array.isArray(mode) && mode.some(value => typeof value === "string" && /^imageReference:[1-9]\d*$/.test(value)))));
+const isAdultWhiteModel = (model: Pick<MediaModel, "providerId" | "modelId">) => model.providerId === "shugando" && /(?:^|[-_.])white$/i.test(model.modelId.trim());
+const imageModels = computed(() => models.value.filter(model => model.type === "image" && (!form.adultExplicit || isAdultWhiteModel(model)) && Array.isArray(model.mode) && model.mode.includes("text") && model.mode.includes("multiReference")));
+const videoModels = computed(() => models.value.filter(model => model.type === "video" && (!form.adultExplicit || isAdultWhiteModel(model)) && model.durationResolutionMap?.length && Array.isArray(model.mode) && model.mode.some(mode => ["singleImage", "startFrameOptional", "endFrameOptional"].includes(mode) || Array.isArray(mode) && mode.some(value => typeof value === "string" && /^imageReference:[1-9]\d*$/.test(value)))));
 const selectedImage = computed(() => imageModels.value.find(model => modelValue(model) === imageValue.value));
 const selectedVideo = computed(() => videoModels.value.find(model => modelValue(model) === videoValue.value));
 const ratios = computed(() => (["16:9", "9:16", "1:1"] as const).filter(ratio => !selectedImage.value?.imageRatios?.length || selectedImage.value.imageRatios.includes(ratio)));
@@ -189,6 +195,7 @@ const validationError = computed(() => {
   if (!modelChoices.value.some(model => model.value === languageValue.value)) return "请先配置并选择剧本模型，使用上游真实模型 ID。";
   if (!selectedImage.value) return "请选择支持文生图与多参考图的图片模型。";
   if (!selectedVideo.value) return "请选择支持图片参考、并声明时长和分辨率的视频模型。";
+  if (form.adultExplicit && (!isAdultWhiteModel(selectedImage.value) || !isAdultWhiteModel(selectedVideo.value))) return "露骨成人模式必须同时使用 Shugando 开白图片模型和开白视频模型。";
   if (!ratios.value.includes(form.ratio) || !durations.value.includes(form.duration) || !resolutions.value.includes(form.resolution)) return "请按所选模型支持的范围选择画幅、时长与分辨率。";
   if (!form.brief.trim()) return "请填写创作需求。";
   if (!Number.isInteger(form.characterCount) || form.characterCount < 1 || form.characterCount > 20 || !Number.isInteger(form.shotCount) || form.shotCount < 1 || form.shotCount > (form.productionMode === "long" ? 240 : 60)) return "角色数和镜头数须在允许范围内。";
@@ -261,7 +268,10 @@ async function loadModels() {
   try {
     const { data } = await axios.get<{ code: number; data: MediaModel[]; message: string }>("/api/ai/media/models", { headers, signal: lifetime.signal });
     if (data.code !== 200 || !Array.isArray(data.data)) throw new Error(data.message || "媒体模型列表无效");
-    if (!lifetime.signal.aborted) models.value = data.data;
+    if (!lifetime.signal.aborted) {
+      models.value = data.data;
+      if (form.adultExplicit) selectAdultModels();
+    }
   } catch (error) { if (!lifetime.signal.aborted) modelError.value = errorMessage(error); }
   finally { loadingModels.value = false; }
 }
@@ -309,15 +319,14 @@ function applyAdult120Preset() {
 
 function selectAdultModels() {
   const video = videoModels.value.find(model => model.modelId.trim().toLowerCase() === "seedance-2.0-white")
-    ?? videoModels.value.find(model => /(?:^|\s)seedance[-_. ]?2\.0(?:[-_. ]?white)?(?:\s|$)/i.test(`${model.modelId} ${model.label}`));
+    ?? videoModels.value.find(model => isAdultWhiteModel(model));
   if (video) {
     videoValue.value = modelValue(video);
     const choices = video.durationResolutionMap?.filter(item => item.duration.includes(15)).flatMap(item => item.resolution) ?? [];
     form.resolution = choices.includes("480p") ? "480p" : choices[0] ?? "";
   }
   const image = imageModels.value.find(model => model.modelId.trim().toLowerCase() === "seedream-5.0-white")
-    ?? imageModels.value.find(model => /seedream[-_. ]?5\.0.*white/i.test(`${model.modelId} ${model.label}`))
-    ?? imageModels.value.find(model => /gpt[-_. ]?image[-_. ]?2\.5/i.test(`${model.modelId} ${model.label}`));
+    ?? imageModels.value.find(model => isAdultWhiteModel(model));
   if (image) imageValue.value = modelValue(image);
 }
 
@@ -418,6 +427,7 @@ watch(visible, value => { if (value) { void refreshStatus(); void loadModels(); 
 watch(modelChoices, choices => {
   if (!languageValue.value) languageValue.value = choices.find(model => /5[.\-]?6.*sol|sol.*5[.\-]?6/i.test(`${model.modelId} ${model.label}`))?.value ?? "";
 }, { immediate: true });
+watch(() => form.adultExplicit, enabled => { if (enabled) selectAdultModels(); });
 watch(ratios, values => { if (!values.includes(form.ratio) && values[0]) form.ratio = values[0]; });
 watch(durations, values => { if (!values.includes(form.duration)) form.duration = values.includes(15) ? 15 : values[0] ?? 0; });
 watch(resolutions, values => { if (!values.includes(form.resolution)) form.resolution = values[0] ?? ""; });

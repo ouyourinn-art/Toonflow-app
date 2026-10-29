@@ -7,18 +7,24 @@ export type StoryBeat = NonNullable<Shot["storyBeat"]>;
 const regionNames = { leftThird: "竖屏左侧三分区", centerThird: "竖屏中央三分区", rightThird: "竖屏右侧三分区" } as const;
 
 export const adultDirection = "所有角色均为明确 25 岁以上的原创虚构成年人，清醒、知情且自愿。直接、具体、生动地设计裸体和双方自愿的性行为；画面提示词明确生殖器持续清晰可见、性交动作与插入关系可辨认，不遮挡、不裁切关键部位，也不以亲吻或拥抱代替指定行为。禁止未成年人或年龄模糊者、强迫、迷奸、昏迷、偷窥、乱伦、暴力、非人动物和真实人物仿造。";
+export const adultAnatomyDirection = "真实人体解剖硬约束：阴茎必须从男性耻骨区自然延伸，根部、阴茎体、冠状沟和龟头比例连续真实；女性阴阜、外阴唇与阴道口位置和层次符合成年人体结构。插入点只能位于阴道口，阴茎轴线、女性骨盆角度和进入方向必须一致，并保留真实的皮肤接触阴影、轻微压痕与组织连续性。严格禁止假阳具或塑料质感、橡胶管状阴茎、阴茎悬浮或脱离身体、阴茎从大腿或腹部错误长出、插入大腿或臀部、错误孔位、器官融合、重复生殖器、异常尺寸、穿模、肢体黏连和人体蜡像感。";
 
 export function explicitStartShot(config: OriginalConfig) {
+  if (config.adultExplicit && config.shotCount === 1) return 0;
   return Math.max(2, Math.ceil(config.shotCount * 0.15));
 }
 
 export function storyBeatOrder(config: OriginalConfig): StoryBeat[] {
+  if (config.adultExplicit && config.shotCount === 1) return ["explicitAction"];
   return config.adultExplicit
     ? ["setup", "consent", "explicitAction", "escalation", "climax", "aftermath"]
     : ["setup", "escalation", "climax", "aftermath"];
 }
 
 export function storyArcInstruction(config: OriginalConfig) {
+  if (config.adultExplicit && config.shotCount === 1) {
+    return `这是单镜成人高光实验，storyBeat 固定为 explicitAction。必须在同一镜头内部按秒完成：开头快速确认双方清醒自愿 → 进入明确成人动作 → 动作与情绪达到高点 → 结尾留下清楚余韵。shotPurpose、framing、action、imagePrompt 和 videoPrompt 必须清楚呈现双方自愿的性交与插入关系，并至少包含一个无遮挡的生殖器细节特写；不能用亲吻、拥抱、远景或镜外暗示替代。`;
+  }
   const beats = config.adultExplicit
     ? "setup（立即建立人物、关系与欲望）→ consent（明确清醒自愿）→ explicitAction（进入初次明确成人动作，形成开场小高潮）→ escalation（持续升级动作与情绪）→ climax（全片主高潮）→ aftermath（有因果结果的余韵）"
     : "setup（建立人物与目标）→ escalation（冲突升级）→ climax（高潮）→ aftermath（有因果结果的收束）";
@@ -78,7 +84,7 @@ export function buildAssetPrompt(asset: Asset, config: OriginalConfig) {
 
 export function buildImagePrompt(plan: OriginalPlan, shot: Shot, config: OriginalConfig, references: string[]) {
   const style = config.style ? `\n统一风格：${config.style}` : "";
-  const adult = config.adultExplicit ? `\n${adultDirection}` : "";
+  const adult = config.adultExplicit ? `\n${adultDirection}\n${adultAnatomyDirection}` : "";
   const referenceLines = references.map((id, index) => {
     if (id.startsWith("asset:")) {
       const assetId = id.slice("asset:".length);
@@ -102,7 +108,7 @@ export function buildVideoPrompt(plan: OriginalPlan, shot: Shot, config: Origina
   const first = Number((duration * 0.2).toFixed(1));
   const last = Number((duration * 0.8).toFixed(1));
   const style = config.style ? `\n统一风格：${config.style}` : "";
-  const adult = config.adultExplicit ? `\n${adultDirection}` : "";
+  const adult = config.adultExplicit ? `\n${adultDirection}\n${adultAnatomyDirection}` : "";
   return `镜头合同：本段严格 ${duration} 秒，对应全片绝对时间 ${shot.startSecond}-${shot.endSecond} 秒；storyBeat=${shot.storyBeat}；镜头目的=${shot.shotPurpose}；景别与运镜=${shot.framing}。
 ${ratioInstruction(config)}
 ${exactCastBlock(plan, shot)}

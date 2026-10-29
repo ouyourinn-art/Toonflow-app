@@ -67,6 +67,13 @@ const taskSchema = z.strictObject({
     characterCoverage: z.record(identifier, z.number().finite().min(0).max(1)),
     averageScores: z.record(identifier, z.number().finite().min(-1).max(1)), reasons: z.array(z.string()),
   }).optional(),
+  imageQa: z.strictObject({
+    passed: z.boolean(),
+    anatomy: z.number().int().min(0).max(100), connection: z.number().int().min(0).max(100),
+    realism: z.number().int().min(0).max(100), visibility: z.number().int().min(0).max(100),
+    reasons: z.array(z.string().trim().min(1).max(1000)).max(20),
+    correctionPrompt: z.string().trim().max(4000),
+  }).optional(),
 });
 export const originalRunSchema = z.strictObject({
   version: z.literal(1), id: z.uuid(),

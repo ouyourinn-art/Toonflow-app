@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { mkdir, readFile, stat } from "@toonflow/file";
 import type { GeneratedMedia, MediaGenerationRequest, MediaModel } from "@toonflow/tools-scaffold/runtime";
 import conf from "@/utils/conf";
-import { getConfiguredModel, streamAi } from "@/utils/ai";
+import { getConfiguredModel, readAiReferences, streamAi } from "@/utils/ai";
 import { generateMedia, listMediaModels } from "@/utils/media/generation";
 import { getMediaProvider, loadMediaProviderSource } from "@/utils/media/provider";
 import { createWorkspaceFfmpeg, prepareWorkspaceFfmpeg } from "@/utils/ffmpeg";
@@ -21,6 +21,13 @@ const stageNames = { story: "stage01Story.json", script: "stage02Script.json", a
 const key = (cwd: string) => process.platform === "win32" ? cwd.toLowerCase() : cwd;
 const runDirectory = (state: OriginalRun) => `originalRuns/${state.id}`;
 const fail = (message: string, status = 400): never => { throw Object.assign(new Error(message), { status }); };
+const adultImageQaSchema = z.strictObject({
+  passed: z.boolean(),
+  anatomy: z.number().int().min(0).max(100), connection: z.number().int().min(0).max(100),
+  realism: z.number().int().min(0).max(100), visibility: z.number().int().min(0).max(100),
+  reasons: z.array(z.string().trim().min(1).max(1000)).max(20),
+  correctionPrompt: z.string().trim().max(4000),
+});
 
 async function readJson(cwd: string, file: string) {
   const { path } = await resolveWorkspacePath(cwd, file);
@@ -80,6 +87,9 @@ async function preflight(config: OriginalConfig) {
     if (Math.ceil(config.shotCount / config.sceneCount) > 12) fail("每场最多 12 镜，请增加长片场景数");
   }
   if (config.planningOnly) return { image: undefined, video: undefined };
+  if (config.adultExplicit && [config.image, config.video].some(selection => !selection || selection.providerId !== "shugando" || !/(?:^|[-_.])white$/i.test(selection.modelId.trim()))) {
+    fail("露骨成人模式必须同时使用 Shugando 开白图片模型和开白视频模型，不能回落到普通媒体模型");
+  }
   if (config.productionMode === "long" && config.costLimit > 0 && config.shotCount * config.costPerVideo > config.costLimit) fail(`预算上限不足：首轮视频预计 ${Number((config.shotCount * config.costPerVideo).toFixed(2))} USD`);
   if (config.faceQaEnabled) await prepareFaceQa();
   const models = await listMediaModels();
@@ -147,7 +157,7 @@ function validatePlan(plan: OriginalPlan, config: OriginalConfig) {
     if (index > 0 && first <= previous) fail(`剧情节拍顺序错误：${beatOrder.join(" → ")}`);
   }
   if (config.adultExplicit && plan.shots.findIndex(shot => shot.storyBeat === "explicitAction") !== explicitStartShot(config)) fail(`明确成人动作必须从第 ${explicitStartShot(config) + 1} 镜开始，使铺垫按单镜粒度控制在开头约 15%`);
-  if (plan.shots.at(-1)?.storyBeat !== "aftermath") fail("最后一镜必须是 aftermath，完成剧情收束");
+  if (config.shotCount > 1 && plan.shots.at(-1)?.storyBeat !== "aftermath") fail("最后一镜必须是 aftermath，完成剧情收束");
   if (config.adultExplicit) {
     const text = plan.shots.map(shot => `${shot.shotPurpose} ${shot.framing} ${shot.action} ${shot.imagePrompt} ${shot.videoPrompt}`).join("\n");
     if (!/(生殖器|阴茎|阴道|外阴|genital).{0,40}(特写|近景|close[ -]?up)|(特写|近景|close[ -]?up).{0,40}(生殖器|阴茎|阴道|外阴|genital)/i.test(text)) fail("露骨成人剧情缺少无遮挡的生殖器细节特写");
@@ -160,6 +170,21 @@ function validatePlan(plan: OriginalPlan, config: OriginalConfig) {
   }
   const used = new Set(plan.shots.flatMap(shot => [...shot.characterIds, shot.sceneId]));
   if (plan.assets.some(asset => !used.has(asset.id))) fail("资产表包含未在任何镜头出场的人物或场景，已在生图前停止");
+}
+
+function reinforceAdultSingleShot(plan: OriginalPlan, config: OriginalConfig) {
+  if (!config.adultExplicit || config.shotCount !== 1) return;
+  const shot = plan.shots[0]!;
+  shot.storyBeat = "explicitAction";
+  shot.shotPurpose = "以真实成年人体解剖为最高优先级，完整呈现无遮挡的阴茎插入阴道特写与连续性交动作；不得以亲吻、拥抱、远景、腿部遮挡或镜外暗示替代。";
+  shot.framing = "竖屏 9:16，摄影机固定在床面骨盆高度，15 秒全程保持下腹部、耻骨区、大腿根部和交合部位的极近景；不向上移动到脸部，不切镜，不改变拍摄轴线，阴茎根部、阴茎体、龟头、女性外阴与阴道口始终处于清晰焦平面。";
+  shot.action = "0-3 秒：两名明确成年且自愿的角色保持骨盆贴合，阴茎从男性耻骨区自然延伸，龟头已通过女性外阴唇进入阴道口，插入点和骨盆方向清楚可见。3-12 秒：男性骨盆沿阴茎轴线做小幅、稳定、连续的前后运动，后撤时保留部分插入，前推时沿同一阴道口进入；女性骨盆自然迎合，皮肤接触阴影和轻微压痕随动作连续变化。12-15 秒：动作逐渐放缓，在仍保持部分插入的真实贴合状态结束。全程不得发生器官悬浮、脱体、穿模、错误孔位、肢体黏连或形态突变。";
+  shot.dialogue = "";
+  shot.startState = "双方已在镜外完成明确同意确认。画面从床面骨盆高度的交合极近景开始：男性位于左侧、女性位于右侧，阴茎根部与男性耻骨区连续，龟头已真实进入女性阴道口，双方下腹部和大腿根部自然贴合。";
+  shot.endState = "保持同一骨盆近景、同一左右位置和同一插入轴线；动作放缓后阴茎仍部分位于阴道内，生殖器结构、皮肤纹理和身体连接保持真实稳定。";
+  shot.continuity = "镜头全程锁定骨盆与交合部位，不移动到脸部；固定人物左右关系、阴茎来源、阴道口位置、骨盆角度、光线和床单位置。每一帧都保持器官与各自身体自然连接，动作只沿同一真实插入轴线连续变化。";
+  shot.imagePrompt = "竖屏 9:16、电影级写实摄影、床面骨盆高度的极近景。画面只覆盖两名原创虚构成年人的下腹部、耻骨区、大腿根部和交合部位，不出现脸。男性位于左侧，阴茎从男性耻骨区自然延伸，根部与腹股沟皮肤连续，阴茎体、冠状沟和龟头比例真实；女性位于右侧，阴阜、外阴唇和阴道口结构自然清楚。龟头与部分阴茎体已经通过外阴唇真实进入阴道口，插入点位准确，阴茎轴线与女性骨盆角度一致。真实皮肤纹理、毛发分布、接触阴影和轻微组织压痕，交合部位准确对焦、无遮挡、未裁切。严格排除假阳具或塑料质感、橡胶管状阴茎、阴茎悬浮或脱离身体、阴茎从大腿或腹部错误长出、错误孔位、器官融合、重复生殖器、异常尺寸、穿模、额外肢体、腿部遮挡和人体蜡像感。";
+  shot.videoPrompt = `严格生成 ${config.duration} 秒竖屏 9:16 单镜连续写实视频。首帧及全段均为床面骨盆高度的交合极近景，只显示两名原创虚构成年人的下腹部、耻骨区、大腿根部和阴茎插入阴道的真实连接，不移动到脸部。${shot.action} 真实人体解剖优先于动作幅度；宁可动作小而稳定，也不能改变阴茎来源、阴道口位置或插入轴线。真实皮肤、毛发、接触阴影、组织压痕和床单摩擦连续变化。禁止假体感、塑料或橡胶质感、器官悬浮、脱体、错误生长位置、错误孔位、重复生殖器、异常膨胀、穿模、融合、突然消失、突然出现、遮挡关键部位、镜头切换、拉远或上移。`;
 }
 
 function buildShortMediaTasks(plan: OriginalPlan, config: OriginalConfig): OriginalTask[] {
@@ -216,6 +241,7 @@ async function planStory(cwd: string, state: OriginalRun) {
     shot.startSecond = index * config.duration;
     shot.endSecond = shot.startSecond + config.duration;
   }
+  reinforceAdultSingleShot(plan, config);
   validatePlan(plan, config);
   await write(cwd, `${runDirectory(state)}/plan.json`, JSON.stringify(plan, null, 2));
   state.jsonFiles = [`${runDirectory(state)}/plan.json`];
@@ -233,6 +259,32 @@ async function languageResponse(state: OriginalRun, prompt: string) {
   const usage = state.usage ?? { input: 0, output: 0, totalTokens: 0 };
   state.usage = { input: usage.input + message.usage.input, output: usage.output + message.usage.output, totalTokens: usage.totalTokens + message.usage.totalTokens };
   return message.content.filter(part => part.type === "text").map(part => part.text).join("");
+}
+
+async function inspectAdultImage(cwd: string, state: OriginalRun, file: GeneratedMedia) {
+  const prompt = `你是成人影视分镜的严格视觉质检员。图中人物均为明确 25 岁以上、原创虚构、清醒知情且自愿的成年人；这里只做技术质量检查，不改写剧情。
+逐项检查这张交合极近景：
+1. anatomy：阴茎是否确实从男性耻骨区自然延伸，根部、阴茎体、冠状沟和龟头比例连续；女性阴阜、外阴唇与阴道口位置是否符合真实人体结构。
+2. connection：阴茎是否沿与骨盆一致的轴线进入唯一且正确的阴道口；不得从大腿、腹部或错误位置长出，不得悬浮、脱体、穿模、融合或出现重复器官。
+3. realism：皮肤、毛发、接触阴影、轻微组织压痕是否自然，不能像塑料、橡胶、假阳具、蜡像或拼贴。
+4. visibility：交合连接是否清晰对焦、无遮挡、未裁切，能明确辨认真实的插入关系。
+每项给 0-100 整数。任何一项低于 82，或存在器官来源错误、错误孔位、悬浮、脱体、穿模、融合、重复器官，passed 必须为 false。reasons 用中文列出画面中实际可见的问题；correctionPrompt 写成下一次生图可直接追加的具体纠偏指令。只输出一个 JSON 对象，不加代码围栏或解释：
+${JSON.stringify(z.toJSONSchema(adultImageQaSchema))}`;
+  const configured = getConfiguredModel(state.config.language.providerId, state.config.language.modelId);
+  const signal = AbortSignal.timeout(10 * 60 * 1000);
+  const references = await readAiReferences(cwd, [{ dataType: "IMAGE", value: { url: file.path, mimeType: file.mimeType } }], signal);
+  const stream = streamAi(configured, { messages: [{ role: "user", content: prompt, timestamp: Date.now() }] }, signal, references);
+  for await (const _event of stream) { /* 消费流后读取最终 JSON。 */ }
+  const message = await stream.result();
+  if (message.stopReason !== "stop") throw new Error(message.errorMessage || `成人分镜图质检未正常结束：${message.stopReason}`);
+  const usage = state.usage ?? { input: 0, output: 0, totalTokens: 0 };
+  state.usage = { input: usage.input + message.usage.input, output: usage.output + message.usage.output, totalTokens: usage.totalTokens + message.usage.totalTokens };
+  const text = message.content.filter(part => part.type === "text").map(part => part.text).join("");
+  return adultImageQaSchema.parse(parseJsonResponse(text));
+}
+
+function needsAdultImageQa(state: OriginalRun, task: OriginalTask) {
+  return state.config.adultExplicit && task.kind === "image" && /(性交|交合|插入|阴茎|阴道|外阴|penetrat|intercourse)/i.test(task.prompt ?? "");
 }
 
 function parseJsonResponse(text: string) {
@@ -515,8 +567,31 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
       request.size = mediaModel.imageSizes?.[0];
       if (references.length) request.images = references.map(file => ({ path: file.path, mimeType: file.mimeType }));
     }
-    task.files = await generateMedia(cwd, task.kind === "video" ? "video" : "image", request, AbortSignal.timeout(30 * 60 * 1000));
-    await verifyFiles(cwd, task.files);
+    if (!needsAdultImageQa(state, task)) {
+      task.files = await generateMedia(cwd, task.kind === "video" ? "video" : "image", request, AbortSignal.timeout(30 * 60 * 1000));
+      await verifyFiles(cwd, task.files);
+    } else {
+      const basePrompt = request.prompt;
+      const maximumAttempts = state.config.maxRetries + 1;
+      for (let attempt = 1; attempt <= maximumAttempts; attempt++) {
+        task.attempts = attempt;
+        request.prompt = attempt === 1 ? basePrompt : `${basePrompt}\n\n【成人分镜图解剖纠偏重试 ${attempt}/${maximumAttempts}】\n${task.imageQa?.correctionPrompt || task.imageQa?.reasons.join("；") || "严格纠正人体解剖与真实插入连接"}`;
+        task.prompt = request.prompt;
+        await save(cwd, control);
+        task.files = await generateMedia(cwd, "image", request, AbortSignal.timeout(30 * 60 * 1000));
+        await verifyFiles(cwd, task.files);
+        try {
+          task.imageQa = await inspectAdultImage(cwd, state, task.files[0]!);
+        } catch (error) {
+          fail(`成人分镜图已生成，但自动解剖质检无法完成；为避免把未审核首帧送入视频模型，已停止：${error instanceof Error ? error.message : "质检返回无效"}`);
+        }
+        const imageQa = task.imageQa ?? fail("成人分镜图质检结果缺失");
+        await write(cwd, `${runDirectory(state)}/imageQa/${task.id.slice("image:".length)}-attempt${attempt}.json`, JSON.stringify(imageQa, null, 2));
+        await save(cwd, control);
+        if (imageQa.passed) break;
+        if (attempt === maximumAttempts) fail(`成人分镜图解剖质检未通过，已用完 ${state.config.maxRetries} 次重试：${imageQa.reasons.join("；")}`);
+      }
+    }
   }
   if (task.status === "running") task.status = "completed";
 }
