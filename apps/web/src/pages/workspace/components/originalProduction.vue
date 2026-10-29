@@ -9,7 +9,7 @@
       <template v-if="editing">
         <div class="presetGrid">
           <div class="presetBar">
-            <div><strong>韩国成人剧情 1 分钟竖屏短片</strong><span>原创虚构韩国成年人，12 镜 × 5 秒，先剧情再升级，多体位、多视角、每镜独立首帧。</span></div>
+            <div><strong>韩国成人剧情 1 分钟竖屏短片</strong><span>先按动漫本子写完整剧情，再按对白、动作与卡点把 12 镜自动分配为 4-15 秒，总长精确 60 秒。</span></div>
             <el-button type="danger" size="large" :disabled="busy || !statusReady" @click="applyAdult60Preset">套用 1 分钟</el-button>
           </div>
           <div class="presetBar longPreset">
@@ -68,7 +68,7 @@
             <el-form-item label="画幅">
               <el-select v-model="form.ratio"><el-option v-for="ratio in ratios" :key="ratio" :value="ratio" :label="ratio" /></el-select>
             </el-form-item>
-            <el-form-item label="单镜时长（以所选视频模型声明为准）">
+            <el-form-item :label="form.productionMode === 'short' && form.adultExplicit ? '目标平均镜长（导演自动拆为 4-15 秒）' : '固定单镜时长（以视频模型声明为准）'">
               <el-select v-model="form.duration" :disabled="!durations.length"><el-option v-for="duration in durations" :key="duration" :value="duration" :label="`${duration} 秒`" /></el-select>
             </el-form-item>
             <el-form-item label="视频分辨率">
@@ -85,7 +85,7 @@
           <el-button text @click="openSettings">配置模型</el-button>
         </div>
         <p v-if="planningValidationError || (!planningOnlyReady && (modelError || validationError))" class="errorText" role="alert">{{ planningValidationError || modelError || validationError }}</p>
-        <p class="costNotice">预计 {{ form.shotCount * form.duration }} 秒{{ form.stitch ? '，合成后按目标时长精确裁切' : '' }}；图片至少 {{ form.characterCount + form.sceneCount + form.shotCount }} 张；视频首轮 {{ form.shotCount }} 段；图片并发 {{ form.imageConcurrency }}，视频并发 {{ form.videoConcurrency }}。<template v-if="form.productionMode === 'long'">首轮估算 {{ firstPassCost }} USD，全部重试上限估算 {{ retryCost }} USD，实际提交受 {{ form.costLimit || '不限' }} USD 预算约束。</template> 生成按供应商实际规则计费。</p>
+        <p class="costNotice">目标 {{ form.shotCount * form.duration }} 秒<template v-if="form.productionMode === 'short' && form.adultExplicit">，各镜按剧情容量自动分配 4-15 秒且总长不变</template>{{ form.stitch ? '，合成后逐镜校准到导演时长' : '' }}；图片至少 {{ form.characterCount + form.sceneCount + form.shotCount }} 张；视频首轮 {{ form.shotCount }} 段；图片并发 {{ form.imageConcurrency }}，视频并发 {{ form.videoConcurrency }}。<template v-if="form.productionMode === 'long'">首轮估算 {{ firstPassCost }} USD，全部重试上限估算 {{ retryCost }} USD，实际提交受 {{ form.costLimit || '不限' }} USD 预算约束。</template> 生成按供应商实际规则计费。</p>
         <div class="actions">
           <el-button v-if="newVersion" :disabled="busy" @click="newVersion = false">返回当前进度</el-button>
           <el-button size="large" :loading="busy" :disabled="!canStartPlanning" @click="startProduction(true)">只生成剧本与分镜 JSON</el-button>
@@ -95,7 +95,7 @@
       <template v-else-if="run">
         <div class="progressHeading"><strong>{{ run.plan?.title || (run.config.productionMode === 'long' ? '正在构建全片圣经与分场剧本' : '正在编写完整剧本') }}</strong><span>{{ statusLabels[run.status] }} · {{ completedCount }}/{{ run.tasks.length }} 步</span></div>
         <el-progress :percentage="progress" :status="run.status === 'completed' ? 'success' : run.status === 'failed' ? 'exception' : undefined" />
-        <p class="runSummary">{{ run.config.planningOnly ? '仅剧本与分镜 JSON' : (run.config.productionMode === 'long' ? `${run.config.targetDurationMinutes} 分钟长片 · ${run.config.sceneCount} 场` : '短片') }} · {{ run.config.characterCount }} 个角色 · {{ run.config.shotCount }} 个镜头 · {{ run.config.ratio }} · 每镜 {{ run.config.duration }} 秒 · {{ run.config.characterLock ? '人物锁定' : '普通身份一致' }} · {{ run.config.continuousShots ? '同场尾帧连续' : '身份分镜首帧' }} · 图片并发 {{ run.config.imageConcurrency }} / 视频并发 {{ run.config.videoConcurrency }} · {{ run.config.adultExplicit ? '露骨成人' : '常规内容' }} · 语言模型 {{ run.config.language.modelId }}<template v-if="run.config.productionMode === 'long' && !run.config.planningOnly"> · 视频估算已用 {{ run.estimatedCost || 0 }} / {{ run.config.costLimit || '不限' }} USD</template></p>
+        <p class="runSummary">{{ run.config.planningOnly ? '仅剧本与分镜 JSON' : (run.config.productionMode === 'long' ? `${run.config.targetDurationMinutes} 分钟长片 · ${run.config.sceneCount} 场` : `短片 · 目标 ${run.config.shotCount * run.config.duration} 秒`) }} · {{ run.config.characterCount }} 个角色 · {{ run.config.shotCount }} 个镜头 · {{ run.config.ratio }}<template v-if="run.config.productionMode === 'short' && run.config.adultExplicit"> · 自动镜长 4-15 秒</template><template v-else> · 每镜 {{ run.config.duration }} 秒</template> · {{ run.config.characterLock ? '人物锁定' : '普通身份一致' }} · {{ run.config.continuousShots ? '同场尾帧连续' : '身份分镜首帧' }} · 图片并发 {{ run.config.imageConcurrency }} / 视频并发 {{ run.config.videoConcurrency }} · {{ run.config.adultExplicit ? '露骨成人' : '常规内容' }} · 语言模型 {{ run.config.language.modelId }}<template v-if="run.config.productionMode === 'long' && !run.config.planningOnly"> · 视频估算已用 {{ run.estimatedCost || 0 }} / {{ run.config.costLimit || '不限' }} USD</template></p>
         <p v-if="run.status === 'pausing'" class="runSummary">当前请求完成并保存后暂停。</p>
         <div v-if="run.error" class="errorBox" role="alert">{{ run.error }}</div>
         <div class="actions">

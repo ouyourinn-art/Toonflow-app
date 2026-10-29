@@ -10,6 +10,8 @@ export const adultDirection = "所有角色均为明确 25 岁以上的原创虚
 export const adultAnatomyDirection = "真实人体解剖硬约束：阴茎必须从男性耻骨区自然延伸，根部、阴茎体、冠状沟和龟头比例连续真实；根部至龟头的物理长度与粗细在同一镜头内始终固定，可见长度只能因为口腔、外阴或阴道的真实遮挡而改变，器官本身不得伸长、缩短、膨胀或收缩。女性阴阜、外阴唇与阴道口位置和层次符合成年人体结构。插入点只能位于阴道口，阴茎轴线、女性骨盆角度和进入方向必须一致，并保留真实的皮肤接触阴影、轻微压痕与组织连续性。允许按创作需求呈现明显大于平均但仍符合成年人体比例的阴茎；严格禁止假阳具或塑料质感、橡胶管状阴茎、望远镜式伸缩、阴茎悬浮或脱离身体、阴茎从大腿或腹部错误长出、插入大腿或臀部、错误孔位、器官融合、重复生殖器、解剖学不可能的夸张尺寸、穿模、肢体黏连和人体蜡像感。";
 export const adultMotionDirection = "成人动作运动学硬约束：口交或性交的往复必须来自人物头部、躯干或骨盆整体沿固定轴线移动，阴茎根部与男性骨盆保持刚性连接，根部至龟头距离逐帧不变。后撤时因为口腔或阴道遮挡减少而露出更多同一根阴茎，推进时因为真实进入而遮挡增加；不得让阴茎自身像活塞、橡胶管或望远镜一样伸缩，不得用镜头变焦、画面缩放、身体漂移或局部形变冒充抽插。";
 
+export const shortShotDurations = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const;
+
 export function explicitStartShot(config: OriginalConfig) {
   if (config.adultExplicit && config.shotCount === 1) return 0;
   if (config.adultExplicit && config.shotCount === 2) return 0;
@@ -43,14 +45,45 @@ export function storyArcInstruction(config: OriginalConfig) {
   const beats = config.adultExplicit
     ? "setup（立即建立人物、关系与欲望）→ consent（明确清醒自愿）→ explicitAction（进入初次明确成人动作，形成开场小高潮）→ escalation（持续升级动作与情绪）→ climax（全片主高潮）→ aftermath（有因果结果的余韵）"
     : "setup（建立人物与目标）→ escalation（冲突升级）→ climax（高潮）→ aftermath（有因果结果的收束）";
+  const targetDuration = config.shotCount * config.duration;
   const adultShots = config.adultExplicit
-    ? ` 按单镜粒度把铺垫控制在全片开头约 15%：前 ${explicitStartShot(config)} 镜完成快速铺垫与明确同意，禁止 explicitAction；第 ${explicitStartShot(config) + 1} 镜必须进入明确成人动作。explicitAction 镜必须清楚呈现双方自愿的性交与插入关系；全片至少安排一个无遮挡的生殖器细节特写，framing 和 shotPurpose 必须明确写出该特写，不能用亲吻、拥抱或远景替代。最后一镜必须是 aftermath。`
+    ? ` 先用人物处境、秘密或风险建立戏剧张力并完成明确同意，首次 explicitAction 应在全片开头约 10%-25% 之间发生（本片最迟 ${Math.max(8, Math.ceil(targetDuration * 0.25))} 秒前进入），不能一开场毫无关系铺垫，也不能拖到半片以后。explicitAction 镜必须清楚呈现双方自愿的性交与插入关系；全片至少安排一个无遮挡的生殖器细节特写，framing 和 shotPurpose 必须明确写出该特写，不能用亲吻、拥抱或远景替代。最后一镜必须是 aftermath。`
     : " 最后一镜必须是 aftermath。";
   return `完整故事必须覆盖 ${beats}，每镜只承担一个清楚的 storyBeat 和 shotPurpose；相邻镜头不得只是更换同义动作。${adultShots}`;
 }
 
 export function timingInstruction(config: OriginalConfig, startShot = 0) {
-  return `绝对时间轴由系统锁定：第 i 镜 startSecond = (${startShot} + i) × ${config.duration}，endSecond = startSecond + ${config.duration}；不得重叠、留白或改变单镜时长。`;
+  if (config.productionMode === "long" || !config.adultExplicit) return `绝对时间轴由系统锁定：第 i 镜 startSecond = (${startShot} + i) × ${config.duration}，endSecond = startSecond + ${config.duration}；不得重叠、留白或改变单镜时长。`;
+  const total = config.shotCount * config.duration;
+  return `短片总时长严格为 ${total} 秒、共 ${config.shotCount} 镜；${config.duration} 秒只是目标平均镜长，不是每镜固定值。每镜时长必须从 [${shortShotDurations.join(", ")}] 秒中选择，第一镜从 0 秒开始，相邻镜头首尾精确相接，最后一镜必须在 ${total} 秒结束。按内容容量分配：单一反应或单一动作 4-5 秒；一句短对白加一个反应、或两个连续动作拍 6-8 秒；复杂换位、脱衣、转身、接触建立或有停顿的关键对白 9-12 秒；只有确实包含三个连续动作拍的关键场面才使用 13-15 秒。对白按普通语速约每秒 3 个汉字、低语约每秒 2 个汉字估算，并额外保留约 1 秒首尾安全余量。每镜填写 timingReason，说明动作拍数、对白容量和选择该时长的理由；不能把本应拆镜的多个动作硬塞进一镜。`;
+}
+
+export function screenplayInstruction(config: OriginalConfig) {
+  const theme = config.adultExplicit
+    ? "若需求未指定具体母题，从秘密关系、偷情风险、久别重逢、办公室秘密关系、初次约会中选择一个最适合的母题；偷情或秘密关系只能发生在原创虚构、25 岁以上、清醒知情且自愿的成年人之间。"
+    : "若需求未指定具体母题，选择一个能在目标时长内完成起承转合的关系或目标冲突。";
+  return `先按常规动漫本子写完整剧本，再拆导演分镜，禁止直接从动作清单开始。${theme}
+script 必须严格采用下面的可读格式：
+作品名 EP001：集标题
+目标时长 / 画幅 / 视觉风格
+剧情母题：一句话写清关系与风险
+剧情梗概：写清主角欲望、阻碍、主动选择、关系变化、高潮与余韵
+人物小传：每人写外在目标、隐藏欲望、边界和本集关系变化
+
+1-1 场景名 日或夜/内或外
+人物：本场实际出场者
+场景目标：人物想得到什么
+阻碍：什么妨碍他或她
+△动作、环境、关键状态
+人物名：台词
+△对方反应与下一行动
+转折/卡点：本场出现的新信息、选择或关系变化
+场景结果：这一场如何因果推动下一场
+[必要转场]
+---
+1-2 下一场景……
+本集结束点：明确写出高潮后的关系结果和余韵。
+每一场和每一镜都必须给观众新信息；卡点来自风险被发现、欲望被确认、边界被选择、关系发生变化或关键动作真正完成，不能只靠换姿势或换机位冒充剧情。`;
 }
 
 function ratioInstruction(config: OriginalConfig) {
