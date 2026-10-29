@@ -72,7 +72,7 @@
           </div>
         </el-form>
         <p v-if="form.adultExplicit" class="adultNotice">成人模式仅构建 25 岁以上、原创虚构、清醒且自愿的角色。系统会发送无遮挡的明确提示词；最终画面仍可能被所选上游模型自行弱化。</p>
-        <p class="runSummary">锁脸说明：当前使用人物母版优先参考、多人区域绑定、严格人数约束与 YuNet + SFace 后验重试；并非上游底层 FaceID / PuLID 硬锁。同一连续镜头链会串行以保持动作衔接，其余场景按设定并发。</p>
+        <p class="runSummary">需求和视觉风格都可以直接修改。已有运行记录时，先点击「编辑需求与风格并新建一版」；修改只作用于新版本，旧剧本、素材和成片不会被覆盖。锁脸说明：当前使用人物母版优先参考、多人区域绑定、严格人数约束与 YuNet + SFace 后验重试；并非上游底层 FaceID / PuLID 硬锁。同一连续镜头链会串行以保持动作衔接，其余场景按设定并发。</p>
         <div class="modelHelp">
           <span>语言、图片与视频分别调用所选供应商；语言 Key 不会自动用于媒体服务。</span>
           <el-button text :loading="loadingModels" @click="loadModels">刷新模型列表</el-button>
@@ -96,7 +96,7 @@
           <el-button v-if="run.status === 'running'" :loading="busy" @click="controlProduction('pause')">完成当前步骤后暂停</el-button>
           <el-button v-if="canResume" type="primary" :loading="busy" :disabled="!statusReady" @click="resumeProduction">继续未完成步骤</el-button>
           <el-button v-if="run.status === 'completed' && run.config.planningOnly" type="primary" :loading="busy" @click="prepareMediaContinuation">审核 JSON 后生成资产与视频</el-button>
-          <el-button v-if="!running" :disabled="busy || !statusReady" @click="prepareNewVersion">新建一版</el-button>
+          <el-button v-if="!running" :disabled="busy || !statusReady" @click="prepareNewVersion">编辑需求与风格并新建一版</el-button>
           <el-button v-if="run.canvases.export" type="success" :disabled="!ready" @click="openCanvas(run.canvases.export)">查看成片</el-button>
         </div>
         <div v-if="run.jsonFiles?.length" class="jsonOutputs">
