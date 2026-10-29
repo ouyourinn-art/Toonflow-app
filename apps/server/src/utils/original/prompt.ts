@@ -1,4 +1,4 @@
-import type { OriginalConfig, OriginalPlan } from "./types";
+import type { OriginalConfig, OriginalPlan, OriginalTask } from "./types";
 
 type Shot = OriginalPlan["shots"][number];
 type Asset = OriginalPlan["assets"][number];
@@ -130,6 +130,33 @@ export function buildAssetPrompt(asset: Asset, config: OriginalConfig) {
   return `${asset.imagePrompt}\n不可变身份指纹：${asset.description}${style}\n${ratioInstruction(config)}\n单人身份母版，只出现 ${asset.id} / ${asset.name} 一人；正面脸清晰，中性表情，完整全身，固定发型、脸型、五官、肤色、体型、身体比例和唯一标志。${adult}\n严格排除其他人物、重复脸、镜中人、拼贴、多宫格、裁脸、遮脸、额外肢体、文字和水印。`;
 }
 
+function buildCharacterViewPrompt(asset: Asset, config: OriginalConfig, view: "face" | "profile") {
+  const shared = `必须与参考人物母版保持同一位原创虚构成年人：逐项锁定脸型、五官比例、发际线、发型、发色、肤色、年龄感、身材比例、身体标记和服装状态。只出现 ${asset.id} / ${asset.name} 一人，不得改变身份、性别表达、体型或任何唯一标记。`;
+  if (view === "face") return `${shared}\n${ratioInstruction(config)}\n身份补充母版：正面头肩近景，镜头与眼睛齐平，中性表情，双眼、眉毛、鼻形、唇形、耳朵、下颌线、发际线和皮肤纹理全部清晰；均匀柔光，无遮挡、无浓妆变化、无夸张表情。严格排除侧脸、闭眼、遮脸、其他人物、重复脸、拼贴、多宫格、文字和水印。`;
+  return `${shared}\n${ratioInstruction(config)}\n身份补充母版：同一人物站立的左侧三分之四全身视图，头部略转向镜头，脸部轮廓、鼻梁侧线、耳朵、下颌线、肩宽、胸腰臀比例、四肢长度和固定身体标记清晰；中性姿势、均匀柔光、完整身体不裁切。严格排除正面证件照、背对镜头、其他人物、重复身体、拼贴、多宫格、文字和水印。`;
+}
+
+export function buildAssetTasks(plan: OriginalPlan, config: OriginalConfig): OriginalTask[] {
+  return plan.assets.flatMap<OriginalTask>(asset => {
+    const base: OriginalTask = {
+      id: `asset:${asset.id}`, kind: "asset", label: `${asset.kind === "character" ? "角色" : "场景"}：${asset.name}`, status: "pending",
+      sceneId: asset.kind === "scene" ? asset.id : undefined, prompt: buildAssetPrompt(asset, config),
+    };
+    if (asset.kind !== "character") return [base];
+    return [base,
+      { id: `asset:${asset.id}:face`, kind: "asset", label: `角色脸部母版：${asset.name}`, status: "pending", prompt: buildCharacterViewPrompt(asset, config, "face"), references: [base.id] },
+      { id: `asset:${asset.id}:profile`, kind: "asset", label: `角色侧面母版：${asset.name}`, status: "pending", prompt: buildCharacterViewPrompt(asset, config, "profile"), references: [base.id] },
+    ];
+  });
+}
+
+function characterReferenceGroups(shot: Shot) {
+  const bases = shot.characterIds.map(id => `asset:${id}`);
+  const faces = shot.characterIds.map(id => `asset:${id}:face`);
+  const profiles = shot.characterIds.map(id => `asset:${id}:profile`);
+  return { bases, faces, profiles };
+}
+
 export function buildImagePrompt(plan: OriginalPlan, shot: Shot, config: OriginalConfig, references: string[]) {
   const style = config.style ? `\n统一风格：${config.style}` : "";
   const explicit = shot.storyBeat === "explicitAction" || shot.storyBeat === "escalation" || shot.storyBeat === "climax";
@@ -160,19 +187,32 @@ export function imageReferenceLimit(config: OriginalConfig) {
 }
 
 export function imageReferenceIds(shot: Shot, previous: Shot | undefined, limit: number) {
+  const characters = characterReferenceGroups(shot);
   return [...new Set([
-    ...shot.characterIds.map(id => `asset:${id}`),
+    ...characters.bases,
+    ...characters.faces,
     ...(previous ? [`image:${previous.id}`] : []),
     `asset:${shot.sceneId}`,
+    ...characters.profiles,
   ])].slice(0, limit);
 }
 
-export function videoReferenceIds(shot: Shot) {
+export function videoReferenceIds(plan: OriginalPlan, shot: Shot) {
+  const characters = characterReferenceGroups(shot);
+  const shotIndex = plan.shots.indexOf(shot);
+  const neighbors = plan.shots
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => item !== shot && item.sceneId === shot.sceneId)
+    .sort((left, right) => Math.abs(left.index - shotIndex) - Math.abs(right.index - shotIndex) || left.index - right.index)
+    .map(({ item }) => `image:${item.id}`);
   return [...new Set([
     `image:${shot.id}`,
-    ...shot.characterIds.map(id => `asset:${id}`),
+    ...characters.bases,
+    ...characters.faces,
     `asset:${shot.sceneId}`,
-  ])];
+    ...characters.profiles,
+    ...neighbors,
+  ])].slice(0, 10);
 }
 
 export function buildVideoPrompt(plan: OriginalPlan, shot: Shot, config: OriginalConfig) {

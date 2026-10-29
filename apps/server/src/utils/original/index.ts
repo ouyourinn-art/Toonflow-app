@@ -11,7 +11,7 @@ import { lockWorkspaceFiles, resolveWorkspacePath, writeWorkspaceFile } from "@/
 import { inspectVideoFaces, prepareFaceQa } from "./faceQa";
 import { buildLongBiblePrompt, buildLongMediaTasks, buildLongScenePrompt, composeLongPlan, validateLongBible, validateLongScene } from "./longProduction";
 import { longBibleSchema, longScenePlanSchema, type LongScenePlan } from "./longTypes";
-import { adultDirection, buildAssetPrompt, buildFaceCorrectionPrompt, buildImagePrompt, buildVideoPrompt, faceQaApplicable, imageReferenceIds, imageReferenceLimit, screenplayInstruction, shortShotDurations, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds } from "./prompt";
+import { adultDirection, buildAssetTasks, buildFaceCorrectionPrompt, buildImagePrompt, buildVideoPrompt, faceQaApplicable, imageReferenceIds, imageReferenceLimit, screenplayInstruction, shortShotDurations, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds } from "./prompt";
 import { originalPlanSchema, originalRunSchema, type OriginalConfig, type OriginalPlan, type OriginalRun, type OriginalTask } from "./types";
 
 type Control = { state: OriginalRun; pause: boolean; saving: Promise<void> };
@@ -271,10 +271,7 @@ function reinforceAdultSingleShot(plan: OriginalPlan, config: OriginalConfig) {
 }
 
 function buildShortMediaTasks(plan: OriginalPlan, config: OriginalConfig): OriginalTask[] {
-  const tasks: OriginalTask[] = plan.assets.map(asset => ({
-    id: `asset:${asset.id}`, kind: "asset", label: `${asset.kind === "character" ? "角色" : "场景"}：${asset.name}`, status: "pending",
-    sceneId: asset.kind === "scene" ? asset.id : undefined, prompt: buildAssetPrompt(asset, config),
-  }));
+  const tasks: OriginalTask[] = buildAssetTasks(plan, config);
   const previousShot = (shot: OriginalPlan["shots"][number]) => {
     const index = plan.shots.indexOf(shot);
     return config.continuousShots ? plan.shots.slice(0, index).findLast(item => item.sceneId === shot.sceneId) : undefined;
@@ -286,7 +283,7 @@ function buildShortMediaTasks(plan: OriginalPlan, config: OriginalConfig): Origi
   }));
   tasks.push(...plan.shots.map<OriginalTask>(shot => ({
     id: `video:${shot.id}`, kind: "video", label: `镜头视频：${shot.title}`, status: "pending", sceneId: shot.sceneId, attempts: 0,
-    prompt: buildVideoPrompt(plan, shot, config), references: videoReferenceIds(shot),
+    prompt: buildVideoPrompt(plan, shot, config), references: videoReferenceIds(plan, shot),
   })));
   if (config.faceQaEnabled) tasks.push(...plan.shots.filter(shot => shot.characterIds.length && faceQaApplicable(shot)).map<OriginalTask>(shot => ({
     id: `qa:${shot.id}`, kind: "qa", label: `人物一致性质检：${shot.title}`, status: "pending", sceneId: shot.sceneId,
