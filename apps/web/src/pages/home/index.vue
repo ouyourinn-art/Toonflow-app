@@ -63,7 +63,7 @@
                 <strong>一键制作成片</strong>
                 <span>填写一次创作需求，按完整剧本 → 人物与场景资产 → 分镜图 → 视频 → 合成成片的顺序执行。</span>
               </div>
-              <el-button class="workflowAction" type="primary" @click="launchOneClickWorkflow">进入一键工作流</el-button>
+              <el-button class="workflowAction" type="primary" :loading="launchingWorkflow || creating" :disabled="launchingWorkflow || creating || opening" @click="launchOneClickWorkflow">进入一键工作流</el-button>
             </div>
             <div class="promptArea">
               <el-card class="promptCard" :class="{ draggingAttachments }" shadow="never" @dragenter.capture="dragEnterAttachments" @dragover.capture="dragOverAttachments" @dragleave.capture="dragLeaveAttachments" @drop.capture="dropAttachments">
@@ -182,6 +182,7 @@ const router = useRouter();
 const pageLifetime = new AbortController();
 const creating = ref(false);
 const opening = ref(false);
+const launchingWorkflow = ref(false);
 const exportingDirectory = ref("");
 const promptWorkspacePicker = ref<InstanceType<typeof workspacePicker>>();
 const relocationPicker = ref<InstanceType<typeof workspacePicker>>();
@@ -282,10 +283,39 @@ function scrollToSection(section: string) {
   });
 }
 
-function launchOneClickWorkflow() {
+async function launchOneClickWorkflow() {
+  if (launchingWorkflow.value || creating.value || opening.value || pageLifetime.signal.aborted) return;
   creationMode.value = "original";
-  scrollToSection("home");
-  void nextTick(() => promptInput.value?.focus());
+  prompt.value = "";
+  promptAttachments.value = [];
+  launchingWorkflow.value = true;
+  try {
+    let parent = workspaceDirectory.value || project.value?.directory;
+    if (parent) {
+      const current = await useWorkspaceFiles(parent).list("", pageLifetime.signal);
+      if (current.empty) {
+        workspaceDirectory.value = parent;
+        await createProject();
+        return;
+      }
+      if (current.entries.some(entry => entry.type === "file" && entry.name === "originalProject.json")) parent = "";
+    }
+    if (!parent) {
+      const { data } = await axios.get<{ code: number; data: { absolutePath: string }; message: string }>("/api/workspaces/list", {
+        params: { path: "" }, headers: { "x-toonflow-workspace": "1" }, signal: pageLifetime.signal,
+      });
+      if (data.code !== 200 || !data.data.absolutePath) throw new Error(data.message || "无法定位默认工作目录");
+      parent = data.data.absolutePath;
+    }
+    const folderName = `一键成片-${new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14)}-${crypto.randomUUID().slice(0, 8)}`;
+    await useWorkspaceFiles(parent).mkdir(folderName);
+    workspaceDirectory.value = `${parent.replace(/[\\/]+$/, "")}\\${folderName}`;
+    await createProject();
+  } catch (error) {
+    if (!pageLifetime.signal.aborted) ElMessage.error(error instanceof Error ? error.message : "无法进入一键工作流，请重试");
+  } finally {
+    launchingWorkflow.value = false;
+  }
 }
 
 function updateActiveSection() {
