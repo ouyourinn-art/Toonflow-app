@@ -4,7 +4,7 @@
   </el-button>
   <el-dialog v-model="visible" title="一键制作" width="min(960px, calc(100vw - 32px))" appendToBody alignCenter>
     <div class="originalProduction">
-      <p class="workflowDescription">短片：完整剧本后直接制作。长片：全片圣经 → 分场剧本 → 角色与场景锚点 → 逐镜生成与人脸质检 → 合成成片。关闭面板不停止后台制作。</p>
+      <p class="workflowDescription">短片：完整剧本后直接制作。长片：全片圣经 → 分场剧本 → 角色与场景锚点 → 逐镜生成 → 人脸 QA + 成人动作 QA → 合成成片。成人动作未真实出现时只重制失败镜头；关闭面板不停止后台制作。</p>
       <div v-if="statusError" class="errorBox" role="alert">{{ statusError }}<el-button text @click="refreshStatus">重新读取进度</el-button></div>
       <template v-if="editing">
         <div class="presetGrid">
@@ -54,10 +54,10 @@
                 <el-select v-model="form.targetDurationMinutes"><el-option v-for="minutes in [10, 20, 30]" :key="minutes" :value="minutes" :label="`${minutes} 分钟`" /></el-select>
               </el-form-item>
               <el-form-item label="场景数"><el-input-number v-model="form.sceneCount" :min="1" :max="60" :precision="0" /></el-form-item>
-              <el-form-item label="单镜失败重试"><el-input-number v-model="form.maxRetries" :min="0" :max="5" :precision="0" /></el-form-item>
               <el-form-item label="视频预算上限（USD）"><el-input-number v-model="form.costLimit" :min="0" :max="100000" :step="10" :precision="2" /></el-form-item>
               <el-form-item label="单段视频估算（USD）"><el-input-number v-model="form.costPerVideo" :min="0.01" :max="10000" :step="0.01" :precision="2" /></el-form-item>
             </template>
+            <el-form-item label="单镜质检失败重试"><el-input-number v-model="form.maxRetries" :min="0" :max="5" :precision="0" /></el-form-item>
             <el-form-item label="图片并发数"><el-input-number v-model="form.imageConcurrency" :min="1" :max="12" :precision="0" /></el-form-item>
             <el-form-item label="视频并发数"><el-input-number v-model="form.videoConcurrency" :min="1" :max="8" :precision="0" /></el-form-item>
             <el-form-item label="人物一致性质检"><el-switch v-model="form.faceQaEnabled" activeText="YuNet + SFace 抽帧验脸" /></el-form-item>
@@ -77,7 +77,7 @@
             <el-form-item label="最终合成"><el-switch v-model="form.stitch" activeText="按镜头顺序自动合成 MP4" /></el-form-item>
           </div>
         </el-form>
-        <p v-if="form.adultExplicit" class="adultNotice">成人模式仅构建 25 岁以上、原创虚构、清醒且自愿的角色。资产图、分镜图和视频强制使用 Shugando 开白模型，不允许回落到普通媒体模型；系统会发送无遮挡的明确提示词。</p>
+        <p v-if="form.adultExplicit" class="adultNotice">成人模式仅构建 25 岁以上、原创虚构、清醒且自愿的角色。资产图、分镜图和视频强制使用 Shugando 开白模型，不允许回落到普通媒体模型；明确成人镜头还会抽取 12 帧执行动作、可见性、运动、解剖和剧情匹配 QA，未通过时只重制失败镜头。</p>
         <p class="runSummary">需求和视觉风格都可以直接修改。已有运行记录时，先点击「编辑需求与风格并新建一版」；修改只作用于新版本，旧剧本、素材和成片不会被覆盖。参考架构采用“一人一张三视图角色板 + 一场景一张环境板 + 连续关键帧链”：分镜图优先参考本镜人物、环境和同场既有关键帧；视频以当前分镜或真实上一镜尾帧作为首帧，再用人物板、环境板和前后相邻关键帧填充最多 9 张图片参考。不会重复同一张图凑数。锁脸仍是参考图约束、多人区域绑定与 YuNet + SFace 后验重试，并非上游底层 FaceID / PuLID 硬锁。</p>
         <div class="modelHelp">
           <span>语言、图片与视频分别调用所选供应商；语言 Key 不会自动用于媒体服务。</span>
@@ -127,6 +127,12 @@
               <strong>成人分镜图解剖 QA：{{ task.imageQa.passed ? '通过' : '未通过' }}</strong>
               <p>解剖 {{ task.imageQa.anatomy }} / 连接 {{ task.imageQa.connection }} / 真实感 {{ task.imageQa.realism }} / 无遮挡 {{ task.imageQa.visibility }}</p>
               <p v-if="task.imageQa.reasons.length">{{ task.imageQa.reasons.join('；') }}</p>
+            </div>
+            <div v-if="task.contentQa" :class="task.contentQa.passed ? 'qaPassed' : 'errorBox'">
+              <strong>成人视频内容 QA：{{ task.contentQa.passed ? '通过' : '未通过' }}</strong>
+              <p>动作可见 {{ task.contentQa.explicitActionVisible }} / 生殖器可见 {{ task.contentQa.genitalVisibility }} / 插入或关键接触 {{ task.contentQa.insertionVisibility }} / 连续运动 {{ task.contentQa.motionEvidence }} / 解剖 {{ task.contentQa.anatomy }} / 剧情匹配 {{ task.contentQa.storyMatch }}</p>
+              <p>均匀抽帧 {{ task.contentQa.sampledFrames }} 张</p>
+              <p v-if="task.contentQa.reasons.length">{{ task.contentQa.reasons.join('；') }}</p>
             </div>
             <pre v-if="task.prompt" class="promptText">{{ task.prompt }}</pre>
             <div v-for="file in task.files" :key="file.path" class="resultFile">{{ file.path }}</div>

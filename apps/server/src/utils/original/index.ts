@@ -12,8 +12,9 @@ import { lockWorkspaceFiles, resolveWorkspacePath, writeWorkspaceFile } from "@/
 import { inspectVideoFaces, prepareFaceQa } from "./faceQa";
 import { buildLongBiblePrompt, buildLongMediaTasks, buildLongScenePrompt, composeLongPlan, validateLongBible, validateLongScene } from "./longProduction";
 import { longBibleSchema, longScenePlanSchema, type LongScenePlan } from "./longTypes";
-import { adultDirection, buildAssetTasks, buildFaceCorrectionPrompt, buildFaceRetryVideoPrompt, buildImagePrompt, buildVideoPrompt, faceQaApplicable, imageReferenceIds, imageReferenceLimit, screenplayInstruction, shortShotDurations, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds } from "./prompt";
+import { adultDirection, buildAssetTasks, buildContentCorrectionPrompt, buildFaceCorrectionPrompt, buildFaceRetryVideoPrompt, buildImagePrompt, buildVideoPrompt, contentQaApplicable, faceQaApplicable, imageReferenceIds, imageReferenceLimit, screenplayInstruction, shortShotDurations, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds } from "./prompt";
 import { originalPlanSchema, originalRunSchema, type OriginalConfig, type OriginalPlan, type OriginalRun, type OriginalTask } from "./types";
+import { adultStoryLibraryInstruction, adultStoryLibrarySnapshot } from "./adultStoryLibrary";
 
 type Control = { state: OriginalRun; pause: boolean; saving: Promise<void> };
 const active = new Map<string, Control>();
@@ -25,10 +26,11 @@ const workflowStages = [
   { id: "assets", label: "03 人物与场景资产", description: "唯一角色表、身份母版与场景锚点。" },
   { id: "storyboard", label: "04 导演分镜", description: "逐镜时长、状态衔接、生图提示词与视频提示词。" },
   { id: "images", label: "05 分镜图", description: "按角色与场景参考生成并质检首帧。" },
-  { id: "videos", label: "06 镜头视频", description: "按真实镜长生成、尾帧续接并执行人物质检。" },
+  { id: "videos", label: "06 镜头视频", description: "按真实镜长生成、尾帧续接并执行人物与成人视频内容质检。" },
   { id: "export", label: "07 合成导出", description: "按时间轴合成并校验最终时长。" },
 ] as const;
 const faceCorrectionMarker = "\n\n【人物身份纠偏重试】";
+const contentCorrectionMarker = "\n\n【成人视频内容纠偏重试";
 const key = (cwd: string) => process.platform === "win32" ? cwd.toLowerCase() : cwd;
 const runDirectory = (state: OriginalRun) => `originalRuns/${state.id}`;
 const fail = (message: string, status = 400): never => { throw Object.assign(new Error(message), { status }); };
@@ -47,6 +49,17 @@ const adultImageQaSchema = z.strictObject({
   passed: z.boolean(),
   anatomy: z.number().int().min(0).max(100), connection: z.number().int().min(0).max(100),
   realism: z.number().int().min(0).max(100), visibility: z.number().int().min(0).max(100),
+  reasons: z.array(z.string().trim().min(1).max(1000)).max(20),
+  correctionPrompt: z.string().trim().max(4000),
+});
+const adultContentQaSchema = z.strictObject({
+  passed: z.boolean(), sampledFrames: z.number().int().min(1).max(24),
+  explicitActionVisible: z.number().int().min(0).max(100),
+  genitalVisibility: z.number().int().min(0).max(100),
+  insertionVisibility: z.number().int().min(0).max(100),
+  motionEvidence: z.number().int().min(0).max(100),
+  anatomy: z.number().int().min(0).max(100),
+  storyMatch: z.number().int().min(0).max(100),
   reasons: z.array(z.string().trim().min(1).max(1000)).max(20),
   correctionPrompt: z.string().trim().max(4000),
 });
@@ -318,6 +331,13 @@ function buildShortMediaTasks(plan: OriginalPlan, config: OriginalConfig): Origi
     id: `qa:${shot.id}`, kind: "qa", label: `人物一致性质检：${shot.title}`, status: "pending", sceneId: shot.sceneId,
     references: [`video:${shot.id}`, ...shot.characterIds.map(id => `asset:${id}`)],
   })));
+  if (config.adultExplicit) tasks.push(...plan.shots.filter(contentQaApplicable).map<OriginalTask>(shot => {
+    const faceQaId = config.faceQaEnabled && shot.characterIds.length && faceQaApplicable(shot) ? `qa:${shot.id}` : undefined;
+    return {
+      id: `contentQa:${shot.id}`, kind: "contentQa", label: `成人视频内容 QA：${shot.title}`, status: "pending", sceneId: shot.sceneId,
+      references: [`video:${shot.id}`, ...(faceQaId ? [faceQaId] : [])],
+    };
+  }));
   if (config.stitch) tasks.push({ id: "export", kind: "export", label: "合成完整视频", status: "pending" });
   return tasks;
 }
@@ -337,9 +357,10 @@ async function planStory(cwd: string, state: OriginalRun) {
   const adult = config.adultExplicit
     ? adultDirection
     : "内容强度严格跟随用户创作需求，不自行添加露骨成人内容。";
-  const prompt = `根据创作需求写出连贯完整的短片剧本与可直接制作的分镜方案。\n需求：${config.brief}\n视觉风格：${config.style || "电影写实"}\n严格锁定 ${config.characterCount} 个角色、${config.shotCount} 个镜头；目标总时长 ${config.shotCount * config.duration} 秒，画幅 ${config.ratio}。系统配置的 ${config.ratio} 是唯一有效画幅，需求文字中的冲突画幅视为旧信息并忽略。\n${adult}\n${screenplayInstruction(config)}\n${storyArcInstruction(config)}\n${timingInstruction(config)}\n${identity}\n${continuity}\n先完成剧本，再从完整剧本整理唯一角色和场景资产，最后按本子中的因果和卡点拆分镜头；同一人的称呼、衣着或姿势变化不能拆成新角色，别名统一归入同一 ID。每镜最多 3 人，必须仅引用资产表中实际出场的角色 ID 和一个场景 ID。每镜填写 storyBeat、shotPurpose、timingReason、framing 和 characterLayout；timingReason 必须根据对白字数、动作拍数量和状态变化解释 endSecond-startSecond。characterLayout 必须与 characterIds 完全相同且每人绑定不同的 leftThird / centerThird / rightThird 竖屏区域，写明位置、姿势、朝向与视线。\nassets 的 description 写固定外观和服装或场景布局，imagePrompt 写资产图构图与光照。shots 的 imagePrompt 写本镜第一帧静态构图；videoPrompt 必须按本镜实际时长（endSecond-startSecond）逐段写从 startState 到 endState 的连续动作、运镜、节奏和声音。脱衣、转身、换位、进入、退出等复杂状态变化必须完整显示或拆成独立过渡镜，不能在镜外突然完成。不要把未出场角色、拼贴、字幕或提示词文字画进图。台词只写入 dialogue。\n只输出符合下列 JSON Schema 的一个 JSON 对象，不加代码围栏或解释：\n${JSON.stringify(z.toJSONSchema(originalPlanSchema))}`;
+  const prompt = `根据创作需求写出连贯完整的短片剧本与可直接制作的分镜方案。\n需求：${config.brief}\n视觉风格：${config.style || "电影写实"}\n严格锁定 ${config.characterCount} 个角色、${config.shotCount} 个镜头；目标总时长 ${config.shotCount * config.duration} 秒，画幅 ${config.ratio}。系统配置的 ${config.ratio} 是唯一有效画幅，需求文字中的冲突画幅视为旧信息并忽略。\n${adult}\n${screenplayInstruction(config)}\n${config.adultExplicit ? adultStoryLibraryInstruction(config.brief) : ""}\n${storyArcInstruction(config)}\n${timingInstruction(config)}\n${identity}\n${continuity}\n先完成剧本，再从完整剧本整理唯一角色和场景资产，最后按本子中的因果和卡点拆分镜头；同一人的称呼、衣着或姿势变化不能拆成新角色，别名统一归入同一 ID。每镜最多 3 人，必须仅引用资产表中实际出场的角色 ID 和一个场景 ID。每镜填写 storyBeat、shotPurpose、timingReason、framing 和 characterLayout；timingReason 必须根据对白字数、动作拍数量和状态变化解释 endSecond-startSecond。characterLayout 必须与 characterIds 完全相同且每人绑定不同的 leftThird / centerThird / rightThird 竖屏区域，写明位置、姿势、朝向与视线。\nassets 的 description 写固定外观和服装或场景布局，imagePrompt 写资产图构图与光照。shots 的 imagePrompt 写本镜第一帧静态构图；videoPrompt 必须按本镜实际时长（endSecond-startSecond）逐段写从 startState 到 endState 的连续动作、运镜、节奏和声音。脱衣、转身、换位、进入、退出等复杂状态变化必须完整显示或拆成独立过渡镜，不能在镜外突然完成。不要把未出场角色、拼贴、字幕或提示词文字画进图。台词只写入 dialogue。\n只输出符合下列 JSON Schema 的一个 JSON 对象，不加代码围栏或解释：\n${JSON.stringify(z.toJSONSchema(originalPlanSchema))}`;
   state.tasks[0]!.prompt = prompt;
   await write(cwd, `${runDirectory(state)}/languagePrompt.txt`, prompt);
+  if (config.adultExplicit) await write(cwd, `${runDirectory(state)}/adultStoryLibrary.json`, JSON.stringify(adultStoryLibrarySnapshot(config.brief), null, 2));
   const configured = getConfiguredModel(config.language.providerId, config.language.modelId);
   const stream = streamAi(configured, { messages: [{ role: "user", content: prompt, timestamp: Date.now() }] }, AbortSignal.timeout(10 * 60 * 1000));
   for await (const _event of stream) { /* 消费流后读取最终结构，不把推理内容持久化。 */ }
@@ -353,7 +374,7 @@ async function planStory(cwd: string, state: OriginalRun) {
   reinforceAdultSingleShot(plan, config);
   validatePlan(plan, config);
   await write(cwd, `${runDirectory(state)}/plan.json`, JSON.stringify(plan, null, 2));
-  state.jsonFiles = [`${runDirectory(state)}/plan.json`];
+  state.jsonFiles = [...(config.adultExplicit ? [`${runDirectory(state)}/adultStoryLibrary.json`] : []), `${runDirectory(state)}/plan.json`];
   state.plan = plan;
   if (config.planningOnly) return;
   state.tasks.splice(1, state.tasks.length - 1, ...buildShortMediaTasks(plan, config));
@@ -445,6 +466,7 @@ async function planLongBible(cwd: string, state: OriginalRun, task: OriginalTask
   const prompt = buildLongBiblePrompt(state.config);
   task.prompt = prompt;
   await write(cwd, `${runDirectory(state)}/longBiblePrompt.txt`, prompt);
+  if (state.config.adultExplicit) await write(cwd, `${runDirectory(state)}/adultStoryLibrary.json`, JSON.stringify(adultStoryLibrarySnapshot(state.config.brief), null, 2));
   const text = await languageResponse(state, prompt);
   await write(cwd, `${runDirectory(state)}/longBibleResponse.txt`, text);
   const bible = longBibleSchema.parse(parseJsonResponse(text));
@@ -452,7 +474,7 @@ async function planLongBible(cwd: string, state: OriginalRun, task: OriginalTask
   state.longBible = bible;
   state.scenePlans = {};
   await write(cwd, `${runDirectory(state)}/longBible.json`, JSON.stringify(bible, null, 2));
-  state.jsonFiles = [`${runDirectory(state)}/longBible.json`];
+  state.jsonFiles = [...(state.config.adultExplicit ? [`${runDirectory(state)}/adultStoryLibrary.json`] : []), `${runDirectory(state)}/longBible.json`];
   state.tasks.splice(1, state.tasks.length - 1, ...bible.scenes.map<OriginalTask>(scene => ({
     id: `scenePlan:${scene.id}`, kind: "scenePlan", label: `展开分场：${scene.title}`, status: "pending", sceneId: scene.id,
   })));
@@ -521,6 +543,73 @@ async function inspectFaces(cwd: string, state: OriginalRun, task: OriginalTask)
   task.qa = result;
   await write(cwd, `${runDirectory(state)}/qa/${task.id.slice("qa:".length)}.json`, JSON.stringify(result, null, 2));
   return { result, videoTask };
+}
+
+async function extractVideoContactSheet(cwd: string, state: OriginalRun, video: GeneratedMedia, shotId: string) {
+  const output: GeneratedMedia = { path: `${runDirectory(state)}/contentQa/${shotId}-contact-sheet.png`, mimeType: "image/png", mediaType: "image" };
+  await mkdir((await resolveWorkspacePath(cwd, `${runDirectory(state)}/contentQa`, true)).path, { recursive: true });
+  const ffmpeg = await createWorkspaceFfmpeg(cwd);
+  const media = await new Promise<import("@toonflow/ffmpeg").FfprobeData>((resolve, reject) => ffmpeg(video.path).ffprobe((error, data) => error ? reject(error) : resolve(data)));
+  const duration = Number(media.format.duration);
+  if (!media.streams.some(stream => stream.codec_type === "video") || !Number.isFinite(duration) || duration <= 0) fail(`成人视频内容 QA 无法读取镜头：${video.path}`);
+  const sampleRate = 12 / duration;
+  const command = ffmpeg(video.path)
+    .noAudio()
+    .videoFilters([`fps=${sampleRate.toFixed(6)}`, "scale=320:-2", "tile=4x3:nb_frames=12:padding=4:margin=4:color=black"])
+    .frames(1)
+    .outputOptions("-y")
+    .output(output.path);
+  await new Promise<void>((resolve, reject) => { command.on("error", reject).on("end", () => resolve()).run(); });
+  await verifyFiles(cwd, [output]);
+  return output;
+}
+
+async function inspectAdultVideo(cwd: string, state: OriginalRun, task: OriginalTask) {
+  const videoId = task.references?.find(id => id.startsWith("video:")) ?? fail("成人视频内容 QA 缺少镜头视频");
+  const videoTask = state.tasks.find(item => item.id === videoId && item.kind === "video") ?? fail("成人视频内容 QA 引用的镜头不存在");
+  const video = videoTask.files?.[0] ?? fail("成人视频内容 QA 的镜头视频尚未完成");
+  const shotId = videoId.slice("video:".length);
+  const shot = state.plan?.shots.find(item => item.id === shotId) ?? fail(`成人视频内容 QA 找不到分镜：${shotId}`);
+  const contactSheet = await extractVideoContactSheet(cwd, state, video, shotId);
+  task.files = [contactSheet];
+  const requiresInsertion = /(插入|性交|交合|阴道|penetrat|intercourse)/i.test(`${shot.shotPurpose} ${shot.action} ${shot.videoPrompt}`);
+  const prompt = `你是成人视频镜头的严格视觉验收员。图中人物均为明确 25 岁以上、原创虚构、清醒知情且自愿的成年人；这里只检查生成视频是否兑现既定分镜，不续写剧情。
+附件是一张按时间顺序从左到右、从上到下排列的 4×3 接触表，共 12 个均匀采样帧。镜头合同如下：
+storyBeat：${shot.storyBeat}
+镜头目的：${shot.shotPurpose}
+动作：${shot.action}
+景别：${shot.framing}
+开始状态：${shot.startState}
+结束状态：${shot.endState}
+本镜${requiresInsertion ? "明确要求真实插入；insertionVisibility 必须严格评分" : "不强制插入，但必须清楚呈现合同指定的成人动作"}。
+
+逐项给 0-100 整数：
+1. explicitActionVisible：合同指定的成人动作是否在多个采样时刻清楚出现，不能只见亲吻、拥抱、床戏暗示或静止贴合。
+2. genitalVisibility：合同要求的生殖器是否清楚、无遮挡、未裁切且属于正确人物。
+3. insertionVisibility：若合同要求插入，进入位置、轴线和身体连接是否在多个采样时刻清楚可辨；否则按合同动作的关键接触是否可见评分。
+4. motionEvidence：相邻采样帧是否显示由头部、躯干或骨盆整体运动造成的连续动作进展；器官自身伸缩、画面缩放、身体漂移或静止不算。
+5. anatomy：身体和器官来源、比例、连接是否稳定真实，不能出现悬浮、脱体、错误孔位、重复器官、穿模、融合或形态突变。
+6. storyMatch：动作是否从开始状态推进到结束状态，并完成本镜剧情卡点，而不是与前后文无关的通用成人画面。
+
+硬性通过线：explicitActionVisible、genitalVisibility、motionEvidence、anatomy 均至少 82，storyMatch 至少 75；${requiresInsertion ? "insertionVisibility 至少 82；" : "insertionVisibility 至少 70；"}任何明显器官伸缩、假体感、错误连接、静止假动作或剧情不匹配都必须 passed=false。reasons 用中文写可见证据；correctionPrompt 写下一次视频生成可直接追加的、针对本镜的具体纠偏指令。sampledFrames 固定写 12。只输出一个 JSON 对象，不加代码围栏或解释：
+${JSON.stringify(z.toJSONSchema(adultContentQaSchema))}`;
+  const configured = getConfiguredModel(state.config.language.providerId, state.config.language.modelId);
+  const signal = AbortSignal.timeout(10 * 60 * 1000);
+  const references = await readAiReferences(cwd, [{ dataType: "IMAGE", value: { url: contactSheet.path, mimeType: contactSheet.mimeType } }], signal);
+  const stream = streamAi(configured, { messages: [{ role: "user", content: prompt, timestamp: Date.now() }] }, signal, references);
+  for await (const _event of stream) { /* 消费流后读取最终 JSON。 */ }
+  const message = await stream.result();
+  if (message.stopReason !== "stop") throw new Error(message.errorMessage || `成人视频内容 QA 未正常结束：${message.stopReason}`);
+  const usage = state.usage ?? { input: 0, output: 0, totalTokens: 0 };
+  state.usage = { input: usage.input + message.usage.input, output: usage.output + message.usage.output, totalTokens: usage.totalTokens + message.usage.totalTokens };
+  const text = message.content.filter(part => part.type === "text").map(part => part.text).join("");
+  const result = adultContentQaSchema.parse(parseJsonResponse(text));
+  result.sampledFrames = 12;
+  const minimumInsertion = requiresInsertion ? 82 : 70;
+  result.passed = result.passed && result.explicitActionVisible >= 82 && result.genitalVisibility >= 82 && result.insertionVisibility >= minimumInsertion && result.motionEvidence >= 82 && result.anatomy >= 82 && result.storyMatch >= 75;
+  task.contentQa = result;
+  await write(cwd, `${runDirectory(state)}/contentQa/${shotId}.json`, JSON.stringify(result, null, 2));
+  return { result, videoTask, shot };
 }
 
 async function verifyFiles(cwd: string, files: GeneratedMedia[]) {
@@ -706,6 +795,8 @@ function taskDependencies(state: OriginalRun, task: OriginalTask) {
       dependencies.push(previous);
       const qa = state.tasks.find(item => item.id === previous.id.replace(/^video:/, "qa:"));
       if (qa) dependencies.push(qa);
+      const contentQa = state.tasks.find(item => item.id === previous.id.replace(/^video:/, "contentQa:"));
+      if (contentQa) dependencies.push(contentQa);
     }
   }
   return [...new Set(dependencies)];
@@ -732,12 +823,48 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
       if (attempts > state.config.maxRetries) fail(`人物一致性质检未通过，已用完 ${state.config.maxRetries} 次重试：${result.reasons.join("；")}`);
       const shotId = videoTask.id.slice("video:".length);
       const shot = state.plan?.shots.find(item => item.id === shotId) ?? fail(`人物一致性质检找不到分镜：${shotId}`);
-      videoTask.prompt = `${videoTask.prompt?.split(faceCorrectionMarker)[0] ?? buildVideoPrompt(state.plan!, shot, state.config)}${buildFaceCorrectionPrompt(state.plan!, shot, attempts, result.reasons)}`;
+      const currentPrompt = videoTask.prompt ?? buildVideoPrompt(state.plan!, shot, state.config);
+      const faceIndex = currentPrompt.indexOf(faceCorrectionMarker);
+      const contentIndex = currentPrompt.indexOf(contentCorrectionMarker);
+      const firstCorrection = [faceIndex, contentIndex].filter(index => index >= 0).sort((left, right) => left - right)[0];
+      const basePrompt = firstCorrection === undefined ? currentPrompt : currentPrompt.slice(0, firstCorrection);
+      const contentCorrection = contentIndex >= 0
+        ? currentPrompt.slice(contentIndex, faceIndex > contentIndex ? faceIndex : undefined)
+        : "";
+      videoTask.prompt = `${basePrompt}${buildFaceCorrectionPrompt(state.plan!, shot, attempts, result.reasons)}${contentCorrection}`;
       task.status = "pending";
       videoTask.status = "pending";
       delete videoTask.files;
       delete videoTask.referenceFrame;
       delete task.qa;
+      const contentTask = state.tasks.find(item => item.id === `contentQa:${shotId}`);
+      if (contentTask) {
+        contentTask.status = "pending";
+        delete contentTask.contentQa;
+        delete contentTask.files;
+        delete contentTask.error;
+      }
+      return;
+    }
+  } else if (task.kind === "contentQa") {
+    const { result, videoTask, shot } = await inspectAdultVideo(cwd, state, task);
+    if (!result.passed) {
+      const attempts = (videoTask.contentQaAttempts ?? 0) + 1;
+      videoTask.contentQaAttempts = attempts;
+      if (attempts > state.config.maxRetries) fail(`成人视频内容 QA 未通过，已用完 ${state.config.maxRetries} 次重试：${result.reasons.join("；")}`);
+      const basePrompt = videoTask.prompt?.split(contentCorrectionMarker)[0] ?? buildVideoPrompt(state.plan!, shot, state.config);
+      videoTask.prompt = `${basePrompt}${buildContentCorrectionPrompt(shot, attempts, result.reasons, result.correctionPrompt)}`;
+      task.status = "pending";
+      videoTask.status = "pending";
+      delete videoTask.files;
+      delete videoTask.referenceFrame;
+      delete task.files;
+      const faceTask = state.tasks.find(item => item.id === `qa:${shot.id}`);
+      if (faceTask) {
+        faceTask.status = "pending";
+        delete faceTask.qa;
+        delete faceTask.error;
+      }
       return;
     }
   } else {
@@ -755,8 +882,11 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
       ? state.plan.shots.find(shot => task.id === `video:${shot.id}`)
       : undefined;
     const identityRecovery = Boolean(videoShot && ((task.qaAttempts ?? 0) > 0 || videoShot.storyBeat === "aftermath" && (task.attempts ?? 0) > 1));
+    const contentRecovery = Boolean(videoShot && (task.contentQaAttempts ?? 0) > 0);
     const effectivePrompt = imageShot
       ? buildImagePrompt(state.plan!, imageShot, state.config, task.references ?? [])
+      : videoShot && contentRecovery
+        ? task.prompt!
       : videoShot && identityRecovery
         // A face-QA retry should simplify the shot contract instead of stacking
         // another large identity block on an already complex motion prompt.
@@ -888,7 +1018,7 @@ async function execute(cwd: string, control: Control, models: Awaited<ReturnType
       }
       const imageTasks = state.tasks.filter(task => ["asset", "image"].includes(task.kind) && ready(state, task)).slice(0, state.config.imageConcurrency);
       const videoTasks = state.tasks.filter(task => task.kind === "video" && ready(state, task)).slice(0, state.config.videoConcurrency);
-      const qaTasks = state.tasks.filter(task => task.kind === "qa" && ready(state, task)).slice(0, state.config.videoConcurrency);
+      const qaTasks = state.tasks.filter(task => ["qa", "contentQa"].includes(task.kind) && ready(state, task)).slice(0, state.config.videoConcurrency);
       const exportTask = state.tasks.find(task => task.kind === "export" && ready(state, task));
       const batch = exportTask ? [exportTask] : [...imageTasks, ...videoTasks, ...qaTasks];
       if (!batch.length) break;

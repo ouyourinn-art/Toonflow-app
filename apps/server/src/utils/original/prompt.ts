@@ -225,6 +225,17 @@ export function buildFaceCorrectionPrompt(plan: OriginalPlan, shot: Shot, attemp
 人物数量、身份指纹和区域绑定严格沿用上文，不再重复扩写。首帧人脸是不可替换的身份锚点；全程保持相同脸型、五官、发际线、发型、肤色和年龄感。禁止陌生脸、融合脸、换脸、复制人物或角色互换。`;
 }
 
+export function contentQaApplicable(shot: Shot) {
+  return shot.storyBeat === "explicitAction" || shot.storyBeat === "escalation" || shot.storyBeat === "climax";
+}
+
+export function buildContentCorrectionPrompt(shot: Shot, attempt: number, reasons: string[], correctionPrompt: string) {
+  return `\n\n【成人视频内容纠偏重试 ${attempt}】
+上一版虽然完成了生成，但没有充分兑现本镜合同。可见问题：${reasons.join("；") || "指定成人动作、运动或剧情卡点不清楚"}。
+本次必须以本镜目的“${shot.shotPurpose}”和动作“${shot.action}”为唯一内容目标。${correctionPrompt || "让要求的成人动作在连续时间采样中清楚可辨，保持真实解剖、稳定身份和前后剧情状态。"}
+禁止把指定动作弱化为拥抱、亲吻、静止贴合、远景、遮挡、镜外暗示或无因果的床戏；禁止用镜头推拉、局部形变或器官伸缩伪造身体运动。`;
+}
+
 export function buildFaceRetryVideoPrompt(plan: OriginalPlan, shot: Shot, config: OriginalConfig, attempt: number) {
   const duration = Math.max(1, Math.round((shot.endSecond ?? config.duration) - (shot.startSecond ?? 0)));
   const aftermathRecovery = shot.storyBeat === "aftermath";

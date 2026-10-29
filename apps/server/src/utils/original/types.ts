@@ -58,10 +58,10 @@ export const originalPlanSchema = z.strictObject({
 
 const generatedFile = z.strictObject({ path: z.string().min(1).max(2048), mimeType: z.string().min(1).max(128), mediaType: z.enum(["image", "video", "audio"]), taskId: z.string().min(1).max(512).optional() });
 const taskSchema = z.strictObject({
-  id: z.string().min(1).max(128), kind: z.enum(["plan", "bible", "scenePlan", "asset", "image", "video", "qa", "export"]), label: z.string(),
+  id: z.string().min(1).max(128), kind: z.enum(["plan", "bible", "scenePlan", "asset", "image", "video", "qa", "contentQa", "export"]), label: z.string(),
   status: z.enum(["pending", "running", "completed", "failed"]), prompt: z.string().optional(),
   references: z.array(z.string()).optional(), referenceFrame: z.string().max(2048).optional(), files: z.array(generatedFile).optional(), error: z.string().optional(),
-  sceneId: identifier.optional(), attempts: z.number().int().nonnegative().optional(), qaAttempts: z.number().int().nonnegative().optional(),
+  sceneId: identifier.optional(), attempts: z.number().int().nonnegative().optional(), qaAttempts: z.number().int().nonnegative().optional(), contentQaAttempts: z.number().int().nonnegative().optional(),
   qa: z.strictObject({
     passed: z.boolean(), sampledFrames: z.number().int().nonnegative(), detectedFrames: z.number().int().nonnegative(),
     unknownFaces: z.number().int().nonnegative(), duplicateFrames: z.number().int().nonnegative(),
@@ -72,6 +72,17 @@ const taskSchema = z.strictObject({
     passed: z.boolean(),
     anatomy: z.number().int().min(0).max(100), connection: z.number().int().min(0).max(100),
     realism: z.number().int().min(0).max(100), visibility: z.number().int().min(0).max(100),
+    reasons: z.array(z.string().trim().min(1).max(1000)).max(20),
+    correctionPrompt: z.string().trim().max(4000),
+  }).optional(),
+  contentQa: z.strictObject({
+    passed: z.boolean(), sampledFrames: z.number().int().min(1).max(24),
+    explicitActionVisible: z.number().int().min(0).max(100),
+    genitalVisibility: z.number().int().min(0).max(100),
+    insertionVisibility: z.number().int().min(0).max(100),
+    motionEvidence: z.number().int().min(0).max(100),
+    anatomy: z.number().int().min(0).max(100),
+    storyMatch: z.number().int().min(0).max(100),
     reasons: z.array(z.string().trim().min(1).max(1000)).max(20),
     correctionPrompt: z.string().trim().max(4000),
   }).optional(),
