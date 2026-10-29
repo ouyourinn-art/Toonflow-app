@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { dirname } from "node:path";
-import { readdir } from "node:fs/promises";
 import { mkdir, readFile, stat } from "@toonflow/file";
 import type { GeneratedMedia, MediaGenerationRequest, MediaModel } from "@toonflow/tools-scaffold/runtime";
 import conf from "@/utils/conf";
@@ -69,28 +68,6 @@ async function readJson(cwd: string, file: string) {
   const info = await stat(path);
   if (!info.isFile() || info.size > 5 * 1024 * 1024) fail("项目数据文件无效或超过 5 MB");
   return JSON.parse(await readFile(path, "utf8"));
-}
-
-async function findLatestReusablePlan(cwd: string): Promise<OriginalPlan | undefined> {
-  try {
-    const root = (await resolveWorkspacePath(cwd, "originalRuns")).path;
-    const entries = await readdir(root, { withFileTypes: true });
-    const candidates = (await Promise.all(entries
-      .filter(entry => entry.isDirectory())
-      .map(async entry => {
-        try { return { id: entry.name, modifiedAt: (await stat(`${root}/${entry.name}/plan.json`)).mtimeMs }; }
-        catch { return undefined; }
-      })))
-      .filter((entry): entry is { id: string; modifiedAt: number } => Boolean(entry))
-      .sort((left, right) => right.modifiedAt - left.modifiedAt);
-    for (const { id } of candidates) {
-      try {
-        const parsed = originalPlanSchema.safeParse(await readJson(cwd, `originalRuns/${id}/plan.json`));
-        if (parsed.success) return parsed.data;
-      } catch { /* Ignore incomplete or invalid historical runs. */ }
-    }
-  } catch { /* No historical plan is a normal first-run state. */ }
-  return undefined;
 }
 
 async function write(cwd: string, file: string, value: string, exclusive = false) {
@@ -1070,10 +1047,22 @@ export async function start(cwd: string, id: string, config: OriginalConfig, pre
     if (previous && previous.id !== previousRunId) fail("项目已有制作记录，请刷新后选择继续或新建一版", 409);
     const project = await readJson(cwd, "originalProject.json");
     if (project?.yaohaoOriginal !== true || project.version !== 1 || !["original", "adaptation"].includes(project.mode)) fail("当前工作区不是受支持的原创项目");
-    // A valid plan is reusable after a media/transport failure. This avoids
-    // paying for another long planning response when only generation needs a
-    // retry; the requested config still re-normalizes the timeline below.
-    const reusePlan = !config.planningOnly && (previous?.plan ?? await findLatestReusablePlan(cwd));
+    // Reuse is only safe when the previous run failed after planning and the
+    // complete planning contract is unchanged. A new duration, brief, style,
+    // cast, shot count or continuity mode must produce a fresh script/plan;
+    // otherwise a "30 second new version" could silently run the old 60
+    // second storyboard.
+    const planningContract = (value: OriginalConfig) => JSON.stringify({
+      productionMode: value.productionMode, brief: value.brief, style: value.style,
+      characterCount: value.characterCount, shotCount: value.shotCount,
+      targetDurationMinutes: value.targetDurationMinutes, sceneCount: value.sceneCount,
+      ratio: value.ratio, duration: value.duration, adultExplicit: value.adultExplicit,
+      characterLock: value.characterLock, continuousShots: value.continuousShots,
+    });
+    const reusePlan = !config.planningOnly && previous?.status !== "completed" && previous?.plan
+      && planningContract(previous.config) === planningContract(config)
+      ? previous.plan
+      : undefined;
     if (reusePlan && previous && config.productionMode !== previous.config.productionMode) fail("继续媒体制作时不能切换短片或长片模式，请新建一版重新规划");
     const models = await preflight(config);
     if (reusePlan) {
