@@ -272,13 +272,8 @@ function reinforceAdultSingleShot(plan: OriginalPlan, config: OriginalConfig) {
 
 function buildShortMediaTasks(plan: OriginalPlan, config: OriginalConfig): OriginalTask[] {
   const tasks: OriginalTask[] = buildAssetTasks(plan, config);
-  const previousShot = (shot: OriginalPlan["shots"][number]) => {
-    const index = plan.shots.indexOf(shot);
-    return config.continuousShots ? plan.shots.slice(0, index).findLast(item => item.sceneId === shot.sceneId) : undefined;
-  };
   tasks.push(...plan.shots.map<OriginalTask>(shot => {
-    const previous = previousShot(shot);
-    const references = imageReferenceIds(shot, previous, imageReferenceLimit(config));
+    const references = imageReferenceIds(plan, shot, imageReferenceLimit(config));
     return { id: `image:${shot.id}`, kind: "image", label: `分镜图：${shot.title}`, status: "pending", sceneId: shot.sceneId, prompt: buildImagePrompt(plan, shot, config, references), references };
   }));
   tasks.push(...plan.shots.map<OriginalTask>(shot => ({
@@ -710,6 +705,10 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
       await save(cwd, control);
       if (mediaModel.audio === "optional") request.generateAudio = true;
     } else {
+      if (task.kind === "asset") {
+        const asset = state.plan?.assets.find(item => task.id === `asset:${item.id}`);
+        if (asset?.kind === "character") request.ratio = "16:9";
+      }
       request.size = mediaModel.imageSizes?.[0];
       if (references.length) request.images = references.map(file => ({ path: file.path, mimeType: file.mimeType }));
     }

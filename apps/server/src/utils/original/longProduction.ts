@@ -87,8 +87,7 @@ export function buildLongMediaTasks(plan: OriginalPlan, config: OriginalConfig):
   for (const scene of [...new Set(plan.shots.map(shot => shot.sceneId))]) {
     const sceneShots = plan.shots.filter(shot => shot.sceneId === scene);
     for (const [index, shot] of sceneShots.entries()) {
-      const previous = index > 0 ? sceneShots[index - 1] : undefined;
-      const imageReferences = imageReferenceIds(shot, previous && config.continuousShots ? previous : undefined, imageReferenceLimit(config));
+      const imageReferences = imageReferenceIds(plan, shot, imageReferenceLimit(config));
       tasks.push({
         id: `image:${shot.id}`, kind: "image", label: `分镜图：${shot.title}`, status: "pending", sceneId: shot.sceneId,
         prompt: buildImagePrompt(plan, shot, config, imageReferences),

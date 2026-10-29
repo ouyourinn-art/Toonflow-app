@@ -78,14 +78,14 @@
           </div>
         </el-form>
         <p v-if="form.adultExplicit" class="adultNotice">成人模式仅构建 25 岁以上、原创虚构、清醒且自愿的角色。资产图、分镜图和视频强制使用 Shugando 开白模型，不允许回落到普通媒体模型；系统会发送无遮挡的明确提示词。</p>
-        <p class="runSummary">需求和视觉风格都可以直接修改。已有运行记录时，先点击「编辑需求与风格并新建一版」；修改只作用于新版本，旧剧本、素材和成片不会被覆盖。多参考默认开启并尽量填满：每个角色先生成全身、脸部近景、侧面三套身份母版，再结合当前分镜、场景锚点、真实上一镜尾帧和相邻分镜，按模型真实上限排序提交；GPT Image 2.5 最多 4 张，Seedream 5.0 Pro 最多 10 张，Seedream 5.0 最多 14 张，Seedance 2.0 使用真实首帧并附加最多 9 张图片参考。不会重复同一张图凑数。锁脸仍是参考图约束、多人区域绑定与 YuNet + SFace 后验重试，并非上游底层 FaceID / PuLID 硬锁。</p>
+        <p class="runSummary">需求和视觉风格都可以直接修改。已有运行记录时，先点击「编辑需求与风格并新建一版」；修改只作用于新版本，旧剧本、素材和成片不会被覆盖。参考架构采用“一人一张三视图角色板 + 一场景一张环境板 + 连续关键帧链”：分镜图优先参考本镜人物、环境和同场既有关键帧；视频以当前分镜或真实上一镜尾帧作为首帧，再用人物板、环境板和前后相邻关键帧填充最多 9 张图片参考。不会重复同一张图凑数。锁脸仍是参考图约束、多人区域绑定与 YuNet + SFace 后验重试，并非上游底层 FaceID / PuLID 硬锁。</p>
         <div class="modelHelp">
           <span>语言、图片与视频分别调用所选供应商；语言 Key 不会自动用于媒体服务。</span>
           <el-button text :loading="loadingModels" @click="loadModels">刷新模型列表</el-button>
           <el-button text @click="openSettings">配置模型</el-button>
         </div>
         <p v-if="planningValidationError || (!planningOnlyReady && (modelError || validationError))" class="errorText" role="alert">{{ planningValidationError || modelError || validationError }}</p>
-        <p class="costNotice">目标 {{ form.shotCount * form.duration }} 秒<template v-if="form.productionMode === 'short' && form.adultExplicit">，各镜按剧情容量自动分配 4-15 秒且总长不变</template>{{ form.stitch ? '，合成后逐镜校准到导演时长' : '' }}；图片至少 {{ form.characterCount * 3 + form.sceneCount + form.shotCount }} 张（每个角色 3 套母版）；视频首轮 {{ form.shotCount }} 段；图片并发 {{ form.imageConcurrency }}，视频并发 {{ form.videoConcurrency }}。<template v-if="form.productionMode === 'long'">首轮估算 {{ firstPassCost }} USD，全部重试上限估算 {{ retryCost }} USD，实际提交受 {{ form.costLimit || '不限' }} USD 预算约束。</template> 生成按供应商实际规则计费。</p>
+        <p class="costNotice">目标 {{ form.shotCount * form.duration }} 秒<template v-if="form.productionMode === 'short' && form.adultExplicit">，各镜按剧情容量自动分配 4-15 秒且总长不变</template>{{ form.stitch ? '，合成后逐镜校准到导演时长' : '' }}；图片至少 {{ form.characterCount + form.sceneCount + form.shotCount }} 张（每个角色仅 1 张三视图资产）；视频首轮 {{ form.shotCount }} 段；图片并发 {{ form.imageConcurrency }}，视频并发 {{ form.videoConcurrency }}。<template v-if="form.productionMode === 'long'">首轮估算 {{ firstPassCost }} USD，全部重试上限估算 {{ retryCost }} USD，实际提交受 {{ form.costLimit || '不限' }} USD 预算约束。</template> 生成按供应商实际规则计费。</p>
         <div class="actions">
           <el-button v-if="newVersion" :disabled="busy" @click="newVersion = false">返回当前进度</el-button>
           <el-button size="large" :loading="busy" :disabled="!canStartPlanning" @click="startProduction(true)">只生成剧本与分镜 JSON</el-button>
