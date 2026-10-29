@@ -18,6 +18,15 @@ type Control = { state: OriginalRun; pause: boolean; saving: Promise<void> };
 const active = new Map<string, Control>();
 const changing = new Set<string>();
 const stageNames = { story: "stage01Story.json", script: "stage02Script.json", assets: "stage03Assets.json", storyboard: "stage04Storyboard.json", images: "stage05Images.json", videos: "stage06Videos.json", export: "stage07Export.json" };
+const workflowStages = [
+  { id: "story", label: "01 故事构思", description: "题材、人物关系、欲望、阻碍与结局。" },
+  { id: "script", label: "02 完整剧本", description: "常规本子、场次、对白、选择、关系变化与卡点。" },
+  { id: "assets", label: "03 人物与场景资产", description: "唯一角色表、身份母版与场景锚点。" },
+  { id: "storyboard", label: "04 导演分镜", description: "逐镜时长、状态衔接、生图提示词与视频提示词。" },
+  { id: "images", label: "05 分镜图", description: "按角色与场景参考生成并质检首帧。" },
+  { id: "videos", label: "06 镜头视频", description: "按真实镜长生成、尾帧续接并执行人物质检。" },
+  { id: "export", label: "07 合成导出", description: "按时间轴合成并校验最终时长。" },
+] as const;
 const key = (cwd: string) => process.platform === "win32" ? cwd.toLowerCase() : cwd;
 const runDirectory = (state: OriginalRun) => `originalRuns/${state.id}`;
 const fail = (message: string, status = 400): never => { throw Object.assign(new Error(message), { status }); };
@@ -47,12 +56,13 @@ async function write(cwd: string, file: string, value: string, exclusive = false
   } finally { release(); }
 }
 
-function save(cwd: string, control: Control) {
+async function save(cwd: string, control: Control) {
+  await syncWorkflowCanvas(cwd, control.state);
   control.state.updatedAt = Date.now();
   const snapshot = JSON.stringify(control.state, null, 2);
   const saving = control.saving.then(() => write(cwd, "originalRun.json", snapshot));
   control.saving = saving.catch(() => {});
-  return saving;
+  await saving;
 }
 
 export async function status(cwd: string): Promise<OriginalRun | null> {
@@ -508,6 +518,60 @@ async function mergeVideos(cwd: string, state: OriginalRun) {
   }, 0);
   if (!result.streams.some(stream => stream.codec_type === "video") || !Number.isFinite(finalDuration) || Math.abs(finalDuration - expectedDuration) > 0.5) fail(`成片时长校验失败：应为 ${expectedDuration} 秒，实际为 ${finalDuration || 0} 秒`);
   return files;
+}
+
+function workflowTasks(state: OriginalRun, stage: typeof workflowStages[number]["id"]) {
+  if (["story", "script", "storyboard"].includes(stage)) return state.tasks.filter(task => ["plan", "bible", "scenePlan"].includes(task.kind));
+  if (stage === "assets") return state.tasks.filter(task => task.kind === "asset");
+  if (stage === "images") return state.tasks.filter(task => task.kind === "image");
+  if (stage === "videos") return state.tasks.filter(task => task.kind === "video" || task.kind === "qa");
+  return state.tasks.filter(task => task.kind === "export");
+}
+
+function workflowStatus(state: OriginalRun, stage: typeof workflowStages[number]["id"], tasks: OriginalTask[]) {
+  if (["story", "script", "storyboard"].includes(stage) && state.plan) return "已完成";
+  if (tasks.some(task => task.status === "failed")) return "失败";
+  if (tasks.some(task => task.status === "running")) return "进行中";
+  if (tasks.length && tasks.every(task => task.status === "completed")) return "已完成";
+  if (!tasks.length && state.config.planningOnly && state.plan) return "仅规划，不执行媒体任务";
+  return "等待前置步骤";
+}
+
+function workflowResult(state: OriginalRun, stage: typeof workflowStages[number]["id"]) {
+  const plan = state.plan;
+  if (!plan) return "当前阶段尚未产生结构化结果。";
+  if (stage === "story") return `# ${plan.title}\n\n${plan.synopsis}`;
+  if (stage === "script") return `# ${plan.title}\n\n${plan.script}`;
+  if (stage === "storyboard") return plan.shots.map((shot, index) => `### ${index + 1}. ${shot.title}\n\n时间：${shot.startSecond}-${shot.endSecond}s（${shotDuration(shot)}s）\n\n剧情卡点：${shot.storyBeat} · ${shot.shotPurpose}\n\n时长判断：${shot.timingReason || "固定镜长"}\n\n起始状态：${shot.startState || "未记录"}\n\n结束状态：${shot.endState || "未记录"}\n\n生图提示词：${shot.imagePrompt}\n\n视频提示词：${shot.videoPrompt}`).join("\n\n");
+  return "本阶段的媒体结果、提示词与错误记录如下。";
+}
+
+async function syncWorkflowCanvas(cwd: string, state: OriginalRun) {
+  const base = runDirectory(state);
+  const file = `${base}/stage00Workflow.json`;
+  state.canvases.workflow = file;
+  for (const stage of workflowStages) {
+    const tasks = workflowTasks(state, stage.id);
+    const details = tasks.length ? tasks.map(task => `## ${task.label}\n\n状态：${task.status}\n\n依赖：${task.references?.join("、") || "无"}\n\n${task.prompt ? `实际提示词：\n\n${task.prompt}\n\n` : ""}${task.error ? `错误：${task.error}\n\n` : ""}${task.files?.length ? `产物：\n${task.files.map(item => `- ${item.path}`).join("\n")}` : "产物：尚未生成"}`).join("\n\n---\n\n") : "当前没有本阶段任务。";
+    const linkedCanvas = state.canvases[stage.id] ? `\n\n详细阶段画布：${state.canvases[stage.id]}` : "";
+    const text = `# ${stage.label}\n\n状态：${workflowStatus(state, stage.id, tasks)}\n\n${stage.description}\n\n运行版本：${state.id}${linkedCanvas}\n\n> 本节点由一键工作流实时同步，用于透明查看；阶段完成后请进入上方详细阶段画布继续编辑。\n\n${workflowResult(state, stage.id)}\n\n---\n\n# 自动任务与真实调用记录\n\n${details}`;
+    await write(cwd, `assets/${state.id}workflow${stage.id}/content.md`, text);
+  }
+  const positions = [
+    { x: 80, y: 80 }, { x: 500, y: 80 }, { x: 920, y: 80 }, { x: 1340, y: 80 },
+    { x: 1340, y: 520 }, { x: 920, y: 520 }, { x: 500, y: 520 },
+  ];
+  const nodes = workflowStages.map((stage, index) => ({
+    id: `${state.id}workflow${stage.id}`, type: "remote-textNode", position: positions[index],
+    data: { label: stage.label, textPath: `assets/${state.id}workflow${stage.id}/content.md` },
+  }));
+  const edges = workflowStages.slice(1).map((stage, index) => ({
+    id: `${state.id}workflowEdge${index}`, source: `${state.id}workflow${workflowStages[index]!.id}`, target: `${state.id}workflow${stage.id}`,
+  }));
+  try { await write(cwd, file, JSON.stringify({ toonflowCanvas: true, yaohaoRunId: state.id, nodes, edges, viewport: { x: 0, y: 0, zoom: 0.65 } }, null, 2), true); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST" || (await readJson(cwd, file))?.yaohaoRunId !== state.id) throw error;
+  }
 }
 
 async function publishCanvas(cwd: string, state: OriginalRun, stage: keyof typeof stageNames, title: string, text: string, tasks: OriginalTask[] = []) {

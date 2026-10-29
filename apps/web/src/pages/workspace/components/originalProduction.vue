@@ -103,7 +103,12 @@
           <el-button v-if="canResume" type="primary" :loading="busy" :disabled="!statusReady" @click="resumeProduction">继续未完成步骤</el-button>
           <el-button v-if="run.status === 'completed' && run.config.planningOnly" type="primary" :loading="busy" @click="prepareMediaContinuation">审核 JSON 后生成资产与视频</el-button>
           <el-button v-if="!running" :disabled="busy || !statusReady" @click="prepareNewVersion">编辑需求与风格并新建一版</el-button>
+          <el-button v-if="run.canvases.workflow" type="primary" plain :disabled="!ready" @click="openCanvas(run.canvases.workflow)">查看透明工作流画布</el-button>
           <el-button v-if="run.canvases.export" type="success" :disabled="!ready" @click="openCanvas(run.canvases.export)">查看成片</el-button>
+        </div>
+        <div v-if="stageCanvases.length" class="canvasOutputs">
+          <span>下钻阶段画布：</span>
+          <el-button v-for="item in stageCanvases" :key="item.file" text size="small" :disabled="busy" @click="openCanvas(item.file)">{{ item.label }}</el-button>
         </div>
         <div v-if="run.jsonFiles?.length" class="jsonOutputs">
           <span>结构化 JSON 已保存：</span>
@@ -183,6 +188,8 @@ const completedCount = computed(() => run.value?.tasks.filter(task => task.statu
 const progress = computed(() => run.value?.tasks.length ? Math.floor(completedCount.value / run.value.tasks.length * 100) : 0);
 const firstPassCost = computed(() => Number((form.shotCount * form.costPerVideo).toFixed(2)));
 const retryCost = computed(() => Number((form.shotCount * (form.maxRetries + 1) * form.costPerVideo).toFixed(2)));
+const canvasLabels: Record<string, string> = { story: "故事", script: "剧本", assets: "人物与场景资产", storyboard: "导演分镜", images: "分镜图", videos: "镜头视频", export: "成片" };
+const stageCanvases = computed(() => Object.entries(run.value?.canvases ?? {}).filter(([key]) => key !== "workflow").map(([key, file]) => ({ label: canvasLabels[key] || key, file })));
 const isAdultWhiteModel = (model: Pick<MediaModel, "providerId" | "modelId">) => model.providerId === "shugando" && /(?:^|[-_.])white$/i.test(model.modelId.trim());
 const imageModels = computed(() => models.value.filter(model => model.type === "image" && (!form.adultExplicit || isAdultWhiteModel(model)) && Array.isArray(model.mode) && model.mode.includes("text") && model.mode.includes("multiReference")));
 const videoModels = computed(() => models.value.filter(model => model.type === "video" && (!form.adultExplicit || isAdultWhiteModel(model)) && model.durationResolutionMap?.length && Array.isArray(model.mode) && model.mode.some(mode => ["singleImage", "startFrameOptional", "endFrameOptional"].includes(mode) || Array.isArray(mode) && mode.some(value => typeof value === "string" && /^imageReference:[1-9]\d*$/.test(value)))));
@@ -454,9 +461,10 @@ onScopeDispose(() => { lifetime.abort(); clearTimeout(pollTimer); });
   .presetBar { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 16px; border: 1px solid var(--el-color-danger-light-5); border-radius: 10px; background: var(--el-color-danger-light-9); div { display: flex; flex-direction: column; gap: 5px; } span { color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; } &.longPreset { border-color: var(--el-color-primary-light-5); background: var(--el-color-primary-light-9); } }
   .adultNotice { color: var(--el-color-danger); background: var(--el-color-danger-light-9); border-radius: 8px; padding: 10px 12px; font-size: 12px; line-height: 1.7; }
   .configGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
-  .modelHelp, .actions, .progressHeading { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .modelHelp, .actions, .progressHeading, .canvasOutputs { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
   .modelHelp { font-size: 12px; color: var(--el-text-color-secondary); }
   .actions { margin: 16px 0; }
+  .canvasOutputs { margin: -4px 0 14px; color: var(--el-text-color-secondary); font-size: 12px; }
   .progressHeading { justify-content: space-between; margin: 16px 0; span { color: var(--el-text-color-secondary); } }
   .errorBox { border: 1px solid var(--el-color-danger-light-5); background: var(--el-color-danger-light-9); color: var(--el-color-danger); padding: 12px; border-radius: 8px; margin: 12px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
   .errorText { color: var(--el-color-danger); font-size: 12px; white-space: pre-wrap; }
