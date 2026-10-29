@@ -11,7 +11,7 @@ import { lockWorkspaceFiles, resolveWorkspacePath, writeWorkspaceFile } from "@/
 import { inspectVideoFaces, prepareFaceQa } from "./faceQa";
 import { buildLongBiblePrompt, buildLongMediaTasks, buildLongScenePrompt, composeLongPlan, validateLongBible, validateLongScene } from "./longProduction";
 import { longBibleSchema, longScenePlanSchema, type LongScenePlan } from "./longTypes";
-import { adultDirection, buildAssetPrompt, buildFaceCorrectionPrompt, buildImagePrompt, buildVideoPrompt, faceQaApplicable, screenplayInstruction, shortShotDurations, storyArcInstruction, storyBeatOrder, timingInstruction } from "./prompt";
+import { adultDirection, buildAssetPrompt, buildFaceCorrectionPrompt, buildImagePrompt, buildVideoPrompt, faceQaApplicable, imageReferenceIds, screenplayInstruction, shortShotDurations, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds } from "./prompt";
 import { originalPlanSchema, originalRunSchema, type OriginalConfig, type OriginalPlan, type OriginalRun, type OriginalTask } from "./types";
 
 type Control = { state: OriginalRun; pause: boolean; saving: Promise<void> };
@@ -274,12 +274,12 @@ function buildShortMediaTasks(plan: OriginalPlan, config: OriginalConfig): Origi
   };
   tasks.push(...plan.shots.map<OriginalTask>(shot => {
     const previous = previousShot(shot);
-    const references = [...shot.characterIds.map(id => `asset:${id}`), previous ? `image:${previous.id}` : `asset:${shot.sceneId}`];
+    const references = imageReferenceIds(shot, previous);
     return { id: `image:${shot.id}`, kind: "image", label: `分镜图：${shot.title}`, status: "pending", sceneId: shot.sceneId, prompt: buildImagePrompt(plan, shot, config, references), references };
   }));
   tasks.push(...plan.shots.map<OriginalTask>(shot => ({
     id: `video:${shot.id}`, kind: "video", label: `镜头视频：${shot.title}`, status: "pending", sceneId: shot.sceneId, attempts: 0,
-    prompt: buildVideoPrompt(plan, shot, config), references: [`image:${shot.id}`],
+    prompt: buildVideoPrompt(plan, shot, config), references: videoReferenceIds(shot),
   })));
   if (config.faceQaEnabled) tasks.push(...plan.shots.filter(shot => shot.characterIds.length && faceQaApplicable(shot)).map<OriginalTask>(shot => ({
     id: `qa:${shot.id}`, kind: "qa", label: `人物一致性质检：${shot.title}`, status: "pending", sceneId: shot.sceneId,
@@ -687,19 +687,21 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
       request.resolution = config.resolution;
       request.mode = videoMode(mediaModel);
       let referenceMedia = references[0];
+      let additionalReferences = references.slice(1, 5);
       if (config.continuousShots) {
         const previousTask = previousVideoTask(state, task);
         if (previousTask) {
           const previous = previousTask.files?.[0] ?? fail("同场上一镜视频尚未完成，无法建立连续首帧");
           referenceMedia = await extractLastFrame(cwd, state, previous, task.id.slice("video:".length));
+          additionalReferences = references.slice(0, 4);
         }
       }
       if (referenceMedia) {
         task.referenceFrame = referenceMedia.path;
         const reference = { path: referenceMedia.path, mimeType: referenceMedia.mimeType };
-        if (Array.isArray(request.mode) || request.mode === "singleImage") request.images = [reference];
-        else request.firstFrame = reference;
+        request.firstFrame = reference;
       } else delete task.referenceFrame;
+      if (additionalReferences.length) request.images = additionalReferences.map(file => ({ path: file.path, mimeType: file.mimeType }));
       await save(cwd, control);
       if (mediaModel.audio === "optional") request.generateAudio = true;
     } else {

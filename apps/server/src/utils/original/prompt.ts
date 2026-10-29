@@ -152,6 +152,22 @@ ${referenceLines.join("\n")}
 ${exclusionBlock(shot)}`;
 }
 
+export function imageReferenceIds(shot: Shot, previous?: Shot) {
+  return [...new Set([
+    ...shot.characterIds.map(id => `asset:${id}`),
+    ...(previous ? [`image:${previous.id}`] : []),
+    `asset:${shot.sceneId}`,
+  ])].slice(0, 4);
+}
+
+export function videoReferenceIds(shot: Shot) {
+  return [...new Set([
+    `image:${shot.id}`,
+    ...shot.characterIds.map(id => `asset:${id}`),
+    `asset:${shot.sceneId}`,
+  ])];
+}
+
 export function buildVideoPrompt(plan: OriginalPlan, shot: Shot, config: OriginalConfig) {
   const duration = (shot.endSecond ?? config.duration) - (shot.startSecond ?? 0);
   const first = Number((duration * 0.2).toFixed(1));
@@ -162,6 +178,7 @@ export function buildVideoPrompt(plan: OriginalPlan, shot: Shot, config: Origina
   return `镜头合同：本段严格 ${duration} 秒，对应全片绝对时间 ${shot.startSecond}-${shot.endSecond} 秒；storyBeat=${shot.storyBeat}；镜头目的=${shot.shotPurpose}；景别与运镜=${shot.framing}。
 ${ratioInstruction(config)}
 ${exactCastBlock(plan, shot)}
+多参考绑定：首帧负责本镜动作起点和连续状态；当前分镜图负责构图、景别与目标动作；人物母版分别锁定各角色的脸、发型、肤色、体型、身体比例和唯一标记；场景锚点锁定空间布局、道具和光线。发生冲突时，人物身份以人物母版为准，动作起点以真实上一镜尾帧为准，构图以当前分镜图为准。禁止把多张人物参考融合成新人、交换身份或复制出额外角色。
 动作与声音：${shot.videoPrompt}
 具体动作：${shot.action}
 对白：${shot.dialogue || "无对白"}

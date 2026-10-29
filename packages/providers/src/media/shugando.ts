@@ -77,13 +77,13 @@ export default {
   label: "Shugando",
   icon: "",
   version: "1.0.0",
-  readme: "使用现有 Shugando 网关 Key。GPT Image 参考图通过 multipart 编辑接口提交；Seedream 开白模型先上传参考图，再以 HTTPS 地址调用 JSON 编辑接口。视频首帧同样使用已登录媒体服务。视频仅提交一次，随后查询同一任务；错误显示任务编号供核对。",
+  readme: "使用现有 Shugando 网关 Key。GPT Image 参考图通过 multipart 编辑接口提交；Seedream 开白模型先上传参考图，再以 HTTPS 地址调用 JSON 编辑接口。Seedance 支持首帧和最多 4 张附加参考图，均使用已登录媒体服务。视频仅提交一次，随后查询同一任务；错误显示任务编号供核对。",
   rules,
   models: [
     { id: "gpt-image-2.5", label: "GPT Image 2.5", type: "image", mode: ["text", "singleImage", "multiReference"], imageSizes: ["1K"], imageRatios: ["16:9", "9:16", "1:1", "4:3", "3:4"] },
     { id: "seedream-5.0-white", label: "Seedream 5.0 开白", type: "image", mode: ["text", "singleImage", "multiReference"], imageSizes: ["1K"], imageRatios: ["16:9", "9:16", "1:1", "4:3", "3:4"] },
     { id: "Dola-Seedream-5.0-Pro-white", label: "Dola Seedream 5.0 Pro 开白", type: "image", mode: ["text", "singleImage", "multiReference"], imageSizes: ["1K"], imageRatios: ["16:9", "9:16", "1:1", "4:3", "3:4"] },
-    { id: "seedance-2.0-white", label: "Seedance 2.0", type: "video", mode: ["text", "startFrameOptional"], durationResolutionMap: [{ duration: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], resolution: ["480p", "720p", "1080p"] }] },
+    { id: "seedance-2.0-white", label: "Seedance 2.0", type: "video", mode: ["text", "startFrameOptional", ["imageReference:4"]], durationResolutionMap: [{ duration: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], resolution: ["480p", "720p", "1080p"] }] },
   ] satisfies ProviderModel[],
   async generateImage(request: ImageRequest): Promise<MediaAsset[]> {
     const apiKey = this.config.apiKey.trim();
@@ -115,7 +115,12 @@ export default {
     const apiKey = this.config.apiKey.trim();
     if (!apiKey) throw new Error("请填写 Shugando API Key");
     if (request.model !== "seedance-2.0-white") throw new Error("此适配器尚未接入所选视频模型");
-    if (request.lastFrame || request.images?.length || request.videos?.length || request.audios?.length || Array.isArray(request.mode) || request.mode && !["text", "startFrameOptional"].includes(request.mode)) throw new Error("当前视频连接仅支持文本或单张首帧");
+    const supportedMode = !request.mode
+      || typeof request.mode === "string" && ["text", "startFrameOptional"].includes(request.mode)
+      || Array.isArray(request.mode) && request.mode.every(value => typeof value === "string" && /^imageReference:[1-4]$/.test(value));
+    if (request.lastFrame || request.videos?.length || request.audios?.length || !supportedMode) throw new Error("当前视频连接仅支持文本、单张首帧和最多 4 张附加图片参考");
+    const references = request.images ?? [];
+    if (references.length > 4) throw new Error("Seedance 视频最多支持 4 张附加参考图");
     const duration = request.duration ?? 4;
     const resolution = request.resolution ?? "480p";
     const ratios: Record<string, [number, number]> = { "16:9": [16, 9], "9:16": [9, 16], "1:1": [1, 1] };
@@ -124,24 +129,9 @@ export default {
     const short = { "480p": 480, "720p": 720, "1080p": 1080 }[resolution];
     if (!Number.isInteger(duration) || duration < 4 || duration > 15 || !dimensions || !short) throw new Error("视频仅支持 4–15 整数秒、16:9 / 9:16 / 1:1、480p / 720p / 1080p");
     const signal = AbortSignal.any([AbortSignal.timeout(25 * 60_000), ...(this.signal ? [this.signal] : [])]);
-    let image: string | undefined;
-    if (request.firstFrame) {
-      if (request.firstFrame.type === "url") {
-        const url = new URL(request.firstFrame.url);
-        if (url.protocol !== "https:" || url.username || url.password || url.hash) throw new Error("首帧必须是 HTTPS 图片地址");
-        image = url.href;
-      }
-      else {
-        if (!this.config.uploadUrl || !this.config.uploadUser || !this.config.uploadToken) throw new Error("请配置参考图上传服务，再提交图生视频");
-        const upload = await this.tool.fetch(endpoint(this.config.uploadUrl), {
-          method: "POST", headers: { Authorization: `Bearer ${this.config.uploadToken}`, "X-Username": this.config.uploadUser, "Content-Type": request.firstFrame.mimeType },
-          body: await bytes(this, request.firstFrame, signal), signal,
-        });
-        const result = await json(this, upload, "参考图上传");
-        if (typeof result.url !== "string" || !/^https:\/\//.test(result.url)) throw new Error("上传服务未返回 HTTPS 参考图地址，尚未提交视频");
-        image = result.url;
-      }
-    }
+    const image = request.firstFrame ? await referenceUrl(this, request.firstFrame, signal) : undefined;
+    const referenceImages = await Promise.all(references.map(input => referenceUrl(this, input, signal)));
+    const images = [...(image ? [image] : []), ...referenceImages];
     const long = { "480p": 864, "720p": 1280, "1080p": 1920 }[resolution]!;
     const width = dimensions[0] > dimensions[1] ? long : short;
     const height = dimensions[1] > dimensions[0] ? long : short;
@@ -149,7 +139,13 @@ export default {
     const headers = { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
     const submitted = await json(this, await this.tool.fetch(`${baseUrl}/videos`, {
       method: "POST", headers, signal,
-      body: JSON.stringify({ model: request.model, prompt: request.prompt, text: request.prompt, seconds: String(duration), duration, ratio, aspect_ratio: ratio, resolution, width, height, size: `${width}x${height}`, videoType: image ? 2 : 1, ...(image ? { image, images: [image], imageUrls: [image] } : {}) }),
+      body: JSON.stringify({
+        model: request.model, prompt: request.prompt, text: request.prompt, seconds: String(duration), duration,
+        ratio, aspect_ratio: ratio, resolution, width, height, size: `${width}x${height}`, videoType: images.length ? 2 : 1,
+        ...(image ? { image, firstFrame: image, first_frame: image } : {}),
+        ...(images.length ? { images, imageUrls: images, image_urls: images } : {}),
+        ...(referenceImages.length ? { referenceImages, reference_images: referenceImages } : {}),
+      }),
     }), "视频提交");
     const task = submitted.data && typeof submitted.data === "object" ? object(submitted.data) : submitted;
     const taskId = task.id ?? task.task_id;

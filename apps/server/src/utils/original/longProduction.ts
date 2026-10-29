@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { longBibleSchema, longScenePlanSchema, type LongBible, type LongScenePlan } from "./longTypes";
 import { originalPlanSchema, type OriginalConfig, type OriginalPlan, type OriginalTask } from "./types";
-import { adultDirection, buildAssetPrompt, buildImagePrompt, buildVideoPrompt, explicitStartShot, faceQaApplicable, storyArcInstruction, storyBeatOrder, timingInstruction, type StoryBeat } from "./prompt";
+import { adultDirection, buildAssetPrompt, buildImagePrompt, buildVideoPrompt, explicitStartShot, faceQaApplicable, imageReferenceIds, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds, type StoryBeat } from "./prompt";
 
 export function shotAllocation(shotCount: number, sceneCount: number) {
   return Array.from({ length: sceneCount }, (_, index) => Math.floor(shotCount / sceneCount) + (index < shotCount % sceneCount ? 1 : 0));
@@ -92,7 +92,7 @@ export function buildLongMediaTasks(plan: OriginalPlan, config: OriginalConfig):
     const sceneShots = plan.shots.filter(shot => shot.sceneId === scene);
     for (const [index, shot] of sceneShots.entries()) {
       const previous = index > 0 ? sceneShots[index - 1] : undefined;
-      const imageReferences = previous && config.continuousShots ? [...shot.characterIds.map(id => `asset:${id}`), `image:${previous.id}`] : [...shot.characterIds.map(id => `asset:${id}`), `asset:${shot.sceneId}`];
+      const imageReferences = imageReferenceIds(shot, previous && config.continuousShots ? previous : undefined);
       tasks.push({
         id: `image:${shot.id}`, kind: "image", label: `分镜图：${shot.title}`, status: "pending", sceneId: shot.sceneId,
         prompt: buildImagePrompt(plan, shot, config, imageReferences),
@@ -101,7 +101,7 @@ export function buildLongMediaTasks(plan: OriginalPlan, config: OriginalConfig):
       tasks.push({
         id: `video:${shot.id}`, kind: "video", label: `镜头视频：${shot.title}`, status: "pending", sceneId: shot.sceneId, attempts: 0,
         prompt: `${buildVideoPrompt(plan, shot, config)}\n${index > 0 && config.continuousShots ? "以同场上一镜最后一帧为本镜第一帧，无缝延续动作、位置、物件和光线。" : "以本镜已锁身份的分镜图作为首帧，优先保持脸与人物数量。"}`,
-        references: [`image:${shot.id}`],
+        references: videoReferenceIds(shot),
       });
       if (config.faceQaEnabled && shot.characterIds.length && faceQaApplicable(shot)) tasks.push({
         id: `qa:${shot.id}`, kind: "qa", label: `人物一致性质检：${shot.title}`, status: "pending", sceneId: shot.sceneId,
