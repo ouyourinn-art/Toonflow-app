@@ -325,7 +325,8 @@ function selectAdultModels() {
     const choices = video.durationResolutionMap?.filter(item => item.duration.includes(15)).flatMap(item => item.resolution) ?? [];
     form.resolution = choices.includes("480p") ? "480p" : choices[0] ?? "";
   }
-  const image = imageModels.value.find(model => model.modelId.trim().toLowerCase() === "seedream-5.0-white")
+  const image = imageModels.value.find(model => model.modelId.trim().toLowerCase() === "dola-seedream-5.0-pro-white")
+    ?? imageModels.value.find(model => model.modelId.trim().toLowerCase() === "seedream-5.0-white")
     ?? imageModels.value.find(model => isAdultWhiteModel(model));
   if (image) imageValue.value = modelValue(image);
 }
