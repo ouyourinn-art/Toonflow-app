@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { dirname } from "node:path";
+import { readdir } from "node:fs/promises";
 import { mkdir, readFile, stat } from "@toonflow/file";
 import type { GeneratedMedia, MediaGenerationRequest, MediaModel } from "@toonflow/tools-scaffold/runtime";
 import conf from "@/utils/conf";
@@ -11,7 +12,7 @@ import { lockWorkspaceFiles, resolveWorkspacePath, writeWorkspaceFile } from "@/
 import { inspectVideoFaces, prepareFaceQa } from "./faceQa";
 import { buildLongBiblePrompt, buildLongMediaTasks, buildLongScenePrompt, composeLongPlan, validateLongBible, validateLongScene } from "./longProduction";
 import { longBibleSchema, longScenePlanSchema, type LongScenePlan } from "./longTypes";
-import { adultDirection, buildAssetTasks, buildFaceCorrectionPrompt, buildImagePrompt, buildVideoPrompt, faceQaApplicable, imageReferenceIds, imageReferenceLimit, screenplayInstruction, shortShotDurations, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds } from "./prompt";
+import { adultDirection, buildAssetTasks, buildFaceCorrectionPrompt, buildFaceRetryVideoPrompt, buildImagePrompt, buildVideoPrompt, faceQaApplicable, imageReferenceIds, imageReferenceLimit, screenplayInstruction, shortShotDurations, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds } from "./prompt";
 import { originalPlanSchema, originalRunSchema, type OriginalConfig, type OriginalPlan, type OriginalRun, type OriginalTask } from "./types";
 
 type Control = { state: OriginalRun; pause: boolean; saving: Promise<void> };
@@ -27,9 +28,20 @@ const workflowStages = [
   { id: "videos", label: "06 镜头视频", description: "按真实镜长生成、尾帧续接并执行人物质检。" },
   { id: "export", label: "07 合成导出", description: "按时间轴合成并校验最终时长。" },
 ] as const;
+const faceCorrectionMarker = "\n\n【人物身份纠偏重试】";
 const key = (cwd: string) => process.platform === "win32" ? cwd.toLowerCase() : cwd;
 const runDirectory = (state: OriginalRun) => `originalRuns/${state.id}`;
 const fail = (message: string, status = 400): never => { throw Object.assign(new Error(message), { status }); };
+const failureMessage = (reason: unknown) => {
+  if (reason instanceof Error) return reason.message;
+  if (typeof reason === "string" && reason.trim()) return reason;
+  if (reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string" && reason.message.trim()) return reason.message;
+  try {
+    const serialized = JSON.stringify(reason);
+    if (serialized && serialized !== "{}") return serialized.slice(0, 4000);
+  } catch { /* Fall through to the stable generic message. */ }
+  return "生成任务失败";
+};
 const shotDuration = (shot: OriginalPlan["shots"][number]) => (shot.endSecond ?? 0) - (shot.startSecond ?? 0);
 const adultImageQaSchema = z.strictObject({
   passed: z.boolean(),
@@ -44,6 +56,28 @@ async function readJson(cwd: string, file: string) {
   const info = await stat(path);
   if (!info.isFile() || info.size > 5 * 1024 * 1024) fail("项目数据文件无效或超过 5 MB");
   return JSON.parse(await readFile(path, "utf8"));
+}
+
+async function findLatestReusablePlan(cwd: string): Promise<OriginalPlan | undefined> {
+  try {
+    const root = (await resolveWorkspacePath(cwd, "originalRuns")).path;
+    const entries = await readdir(root, { withFileTypes: true });
+    const candidates = (await Promise.all(entries
+      .filter(entry => entry.isDirectory())
+      .map(async entry => {
+        try { return { id: entry.name, modifiedAt: (await stat(`${root}/${entry.name}/plan.json`)).mtimeMs }; }
+        catch { return undefined; }
+      })))
+      .filter((entry): entry is { id: string; modifiedAt: number } => Boolean(entry))
+      .sort((left, right) => right.modifiedAt - left.modifiedAt);
+    for (const { id } of candidates) {
+      try {
+        const parsed = originalPlanSchema.safeParse(await readJson(cwd, `originalRuns/${id}/plan.json`));
+        if (parsed.success) return parsed.data;
+      } catch { /* Ignore incomplete or invalid historical runs. */ }
+    }
+  } catch { /* No historical plan is a normal first-run state. */ }
+  return undefined;
 }
 
 async function write(cwd: string, file: string, value: string, exclusive = false) {
@@ -508,7 +542,11 @@ async function extractLastFrame(cwd: string, state: OriginalRun, video: Generate
   const media = await new Promise<import("@toonflow/ffmpeg").FfprobeData>((resolve, reject) => ffmpeg(video.path).ffprobe((error, data) => error ? reject(error) : resolve(data)));
   const duration = Number(media.format.duration);
   if (!media.streams.some(stream => stream.codec_type === "video") || !Number.isFinite(duration) || duration <= 0) fail(`上一镜视频无法提取连续帧：${video.path}`);
-  const command = ffmpeg(video.path).seekInput(Math.max(0, duration - 0.05)).noAudio().frames(1).outputOptions("-y").output(output.path);
+  // Seeking only 50 ms from EOF is too close for some H.264 encoders: ffmpeg
+  // can reach the trailer without decoding a complete frame and then report
+  // success without creating the requested image. Keep a small safety margin
+  // while still sampling the visible end state used by the next shot.
+  const command = ffmpeg(video.path).seekInput(Math.max(0, duration - 0.25)).noAudio().frames(1).outputOptions("-y").output(output.path);
   await new Promise<void>((resolve, reject) => { command.on("error", reject).on("end", () => resolve()).run(); });
   await verifyFiles(cwd, [output]);
   return output;
@@ -686,12 +724,15 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
   else if (task.kind === "qa") {
     const { result, videoTask } = await inspectFaces(cwd, state, task);
     if (!result.passed) {
-      const attempts = videoTask.attempts ?? 1;
+      // Transport failures and continuity-frame preparation retries are not
+      // face-QA attempts. Counting every submission here could exhaust the
+      // identity retry budget before a single video was actually inspected.
+      const attempts = (videoTask.qaAttempts ?? 0) + 1;
+      videoTask.qaAttempts = attempts;
       if (attempts > state.config.maxRetries) fail(`人物一致性质检未通过，已用完 ${state.config.maxRetries} 次重试：${result.reasons.join("；")}`);
       const shotId = videoTask.id.slice("video:".length);
       const shot = state.plan?.shots.find(item => item.id === shotId) ?? fail(`人物一致性质检找不到分镜：${shotId}`);
-      const correctionMarker = "\n\n【人物身份纠偏重试】";
-      videoTask.prompt = `${videoTask.prompt?.split(correctionMarker)[0] ?? buildVideoPrompt(state.plan!, shot, state.config)}${buildFaceCorrectionPrompt(state.plan!, shot, attempts, result.reasons)}`;
+      videoTask.prompt = `${videoTask.prompt?.split(faceCorrectionMarker)[0] ?? buildVideoPrompt(state.plan!, shot, state.config)}${buildFaceCorrectionPrompt(state.plan!, shot, attempts, result.reasons)}`;
       task.status = "pending";
       videoTask.status = "pending";
       delete videoTask.files;
@@ -710,9 +751,18 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
     const imageShot = task.kind === "image" && state.plan
       ? state.plan.shots.find(shot => task.id === `image:${shot.id}`)
       : undefined;
+    const videoShot = task.kind === "video" && state.plan
+      ? state.plan.shots.find(shot => task.id === `video:${shot.id}`)
+      : undefined;
+    const identityRecovery = Boolean(videoShot && ((task.qaAttempts ?? 0) > 0 || videoShot.storyBeat === "aftermath" && (task.attempts ?? 0) > 1));
     const effectivePrompt = imageShot
       ? buildImagePrompt(state.plan!, imageShot, state.config, task.references ?? [])
-      : task.prompt!;
+      : videoShot && identityRecovery
+        // A face-QA retry should simplify the shot contract instead of stacking
+        // another large identity block on an already complex motion prompt.
+        ? buildFaceRetryVideoPrompt(state.plan!, videoShot, state.config, task.qaAttempts ?? 1)
+        : task.prompt!;
+    if (videoShot) task.prompt = effectivePrompt;
     if (imageShot) task.prompt = effectivePrompt;
     const request: MediaGenerationRequest = {
       ...mediaSelection, prompt: effectivePrompt, ratio: config.ratio,
@@ -740,8 +790,34 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
         const previousTask = previousVideoTask(state, task);
         if (previousTask) {
           const previous = previousTask.files?.[0] ?? fail("同场上一镜视频尚未完成，无法建立连续首帧");
-          referenceMedia = await extractLastFrame(cwd, state, previous, task.id.slice("video:".length));
-          additionalReferences = references.slice(0, additionalReferenceLimit);
+          const continuityFrame = await extractLastFrame(cwd, state, previous, task.id.slice("video:".length));
+          referenceMedia = continuityFrame;
+          if (identityRecovery && videoShot?.storyBeat === "aftermath" && (task.attempts ?? 0) >= 5) {
+            const setupShot = state.plan?.shots.find(item => item.storyBeat === "setup");
+            const setupImageIndex = setupShot ? task.references?.findIndex(id => id === `image:${setupShot.id}`) ?? -1 : -1;
+            // Some providers reject an explicit/partly undressed continuity
+            // tail before they evaluate the clothed aftermath prompt. After
+            // repeated transport failures, reuse the already-approved two-face
+            // setup keyframe. Character masters and the scene anchor still
+            // lock identity and environment; the prompt treats it as the
+            // clothed moment immediately following the prior scene.
+            if (setupImageIndex >= 0) referenceMedia = references[setupImageIndex] ?? continuityFrame;
+          }
+          if ((task.qaAttempts ?? 0) > 0) {
+            const shotIndex = state.plan?.shots.findIndex(item => item.id === shotId) ?? -1;
+            const nextShot = shotIndex >= 0 ? state.plan?.shots[shotIndex + 1] : undefined;
+            const nextImageIndex = nextShot ? task.references?.findIndex(id => id === `image:${nextShot.id}`) ?? -1 : -1;
+            // The next keyframe represents this shot's intended end state and
+            // often has a clearer two-face composition than an action detail.
+            if (nextImageIndex >= 0) referenceMedia = references[nextImageIndex] ?? continuityFrame;
+          }
+          additionalReferences = identityRecovery
+            // The current storyboard may be a body-detail composition with no
+            // useful face. On identity retries keep only the two character
+            // masters and the scene anchor after the real continuity frame.
+            ? references.slice(1, Math.min(4, additionalReferenceLimit + 1))
+            : references.slice(0, additionalReferenceLimit);
+          if (identityRecovery && videoShot?.storyBeat === "aftermath" && (task.attempts ?? 0) >= 5) additionalReferences = [];
         }
       }
       if (referenceMedia) {
@@ -823,7 +899,7 @@ async function execute(cwd: string, control: Control, models: Awaited<ReturnType
         if (result.status === "fulfilled") continue;
         const task = batch[index]!;
         task.status = "failed";
-        task.error = result.reason instanceof Error ? result.reason.message : "生成任务失败";
+        task.error = failureMessage(result.reason);
       }
       await save(cwd, control);
       await publishCompleted(cwd, state);
@@ -864,10 +940,16 @@ export async function start(cwd: string, id: string, config: OriginalConfig, pre
     if (previous && previous.id !== previousRunId) fail("项目已有制作记录，请刷新后选择继续或新建一版", 409);
     const project = await readJson(cwd, "originalProject.json");
     if (project?.yaohaoOriginal !== true || project.version !== 1 || !["original", "adaptation"].includes(project.mode)) fail("当前工作区不是受支持的原创项目");
-    const reusePlan = previous?.status === "completed" && previous.config.planningOnly && !config.planningOnly && previous.plan;
-    if (reusePlan && config.productionMode !== previous.config.productionMode) fail("继续媒体制作时不能切换短片或长片模式，请新建一版重新规划");
+    // A valid plan is reusable after a media/transport failure. This avoids
+    // paying for another long planning response when only generation needs a
+    // retry; the requested config still re-normalizes the timeline below.
+    const reusePlan = !config.planningOnly && (previous?.plan ?? await findLatestReusablePlan(cwd));
+    if (reusePlan && previous && config.productionMode !== previous.config.productionMode) fail("继续媒体制作时不能切换短片或长片模式，请新建一版重新规划");
     const models = await preflight(config);
-    if (reusePlan) validatePlan(reusePlan, config);
+    if (reusePlan) {
+      normalizeShortTimeline(reusePlan, config);
+      validatePlan(reusePlan, config);
+    }
     const initialTask: OriginalTask = config.productionMode === "long"
       ? { id: "bible", kind: "bible", label: "全片圣经、唯一角色库与分场规划", status: "pending" }
       : { id: "plan", kind: "plan", label: "完整剧本、唯一角色表与导演分镜", status: "pending" };

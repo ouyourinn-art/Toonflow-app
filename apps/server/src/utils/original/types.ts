@@ -61,7 +61,7 @@ const taskSchema = z.strictObject({
   id: z.string().min(1).max(128), kind: z.enum(["plan", "bible", "scenePlan", "asset", "image", "video", "qa", "export"]), label: z.string(),
   status: z.enum(["pending", "running", "completed", "failed"]), prompt: z.string().optional(),
   references: z.array(z.string()).optional(), referenceFrame: z.string().max(2048).optional(), files: z.array(generatedFile).optional(), error: z.string().optional(),
-  sceneId: identifier.optional(), attempts: z.number().int().nonnegative().optional(),
+  sceneId: identifier.optional(), attempts: z.number().int().nonnegative().optional(), qaAttempts: z.number().int().nonnegative().optional(),
   qa: z.strictObject({
     passed: z.boolean(), sampledFrames: z.number().int().nonnegative(), detectedFrames: z.number().int().nonnegative(),
     unknownFaces: z.number().int().nonnegative(), duplicateFrames: z.number().int().nonnegative(),

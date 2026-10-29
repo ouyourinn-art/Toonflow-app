@@ -221,9 +221,29 @@ ${exactCastBlock(plan, shot)}
 
 export function buildFaceCorrectionPrompt(plan: OriginalPlan, shot: Shot, attempt: number, reasons: string[]) {
   return `\n\n【人物身份纠偏重试】
-这是第 ${attempt + 1} 次生成，上一版人物一致性质检失败：${reasons.join("；")}。
+第 ${attempt + 1} 次生成；上一版问题：${reasons.join("；") || "人物身份匹配不足"}。
+人物数量、身份指纹和区域绑定严格沿用上文，不再重复扩写。首帧人脸是不可替换的身份锚点；全程保持相同脸型、五官、发际线、发型、肤色和年龄感。禁止陌生脸、融合脸、换脸、复制人物或角色互换。`;
+}
+
+export function buildFaceRetryVideoPrompt(plan: OriginalPlan, shot: Shot, config: OriginalConfig, attempt: number) {
+  const duration = Math.max(1, Math.round((shot.endSecond ?? config.duration) - (shot.startSecond ?? 0)));
+  const aftermathRecovery = shot.storyBeat === "aftermath";
+  if (aftermathRecovery) return `本段严格 ${duration} 秒，竖屏 ${config.ratio}，连续单镜头，电影级写实。
+首帧中的一男一女是全片同一对成年人，也是唯一允许出现的人物。把首帧两张脸作为不可替换的身份锚点：始终保持各自五官、脸型、发型、肤色和年龄感，不换脸、不融合、不复制、不新增人物。
+两人已经穿好首帧中的固定服装。男主固定在画面左侧，女主固定在右侧；两人保持牵手和对视，缓慢转向同一房间的雨窗。女主轻声说“我今晚不走”，男主收紧相握的手，两人并肩看雨。动作克制自然，两张完整脸在绝大多数帧持续清晰可见，最后停在两人的侧脸和相握的手。
+保持首帧卧室、暖灯、蓝色雨夜与人物身份不变。禁止第三人、陌生脸、重复人物、换脸、脸部融合、身份漂移、额外头部或肢体、错误倒影、突然换场、跳切、蒙太奇、横屏黑边、文字、字幕、水印、拼贴和分屏。`;
+  const motion = aftermathRecovery
+    ? "镜头使用双人面部优先的竖屏中景：首帧中的两名角色已经穿好各自固定服装并在同一卧室，直接从相握的手、对视和雨窗关系继续；不重演床上动作，不要求在镜内穿衣。两人保持牵手走到雨窗前，男主固定在左、女主固定在右。女主转脸说出留下的决定，两人并肩看雨，以相握的手和侧脸收束。"
+    : "镜头使用双人面部优先的竖屏中近景：两张完整脸在绝大多数帧中持续清晰可见，五官、脸型、发际线、发型、肤色、年龄感与各自人物母版一致。人物保持亲密身体接触与稳定连续的床上动作，用眼神、呼吸、手部相握和表情完成情绪高潮；不得切到局部特写，不得让头部长期离开画面。最后三秒动作自然放缓，两人额头靠近、手指相握，为下一镜起身走向窗边留下明确状态。";
+  const opening = aftermathRecovery
+    ? "首帧是同一对角色在同一卧室的清晰双人身份关键帧，代表高潮后已经穿衣的下一时刻；允许省略镜外穿衣，但人物、房间、雨夜、灯光和关系必须与上一镜一致。"
+    : "首帧是上一镜真实尾帧，必须从该姿势、床位、光线和两张脸原地继续，不能重置场景。";
+  return `人物一致性重制合同，第 ${attempt} 次身份纠偏。本段严格 ${duration} 秒，${ratioInstruction(config)}
+本段属于同一连续剧情的“${shot.title}”，目的：${shot.shotPurpose}。${opening}
 ${exactCastBlock(plan, shot)}
-本次必须把首帧中的脸当作不可替换的身份锚点：保持相同脸型、眉眼间距、鼻形、唇形、下颌线、发际线、发型、肤色和年龄感；运动、转头、表情及身体动作都不得改变身份。每个角色只能出现在其绑定区域，禁止陌生脸、脸部融合、换脸、同一角色复制、角色互换或新增人物。先稳定保持脸和人数，再完成镜头动作。`;
+${motion}
+对白：${shot.dialogue || "无对白"}
+只允许这两名角色；禁止陌生脸、脸部融合、换脸、复制人物、角色互换、第三人、错误倒影、额外头部或肢体、身份漂移、场景跳变、横屏黑边、拼贴、字幕、文字和水印。真实电影摄影，连续单镜头，不跳切。`;
 }
 
 export function faceQaApplicable(shot: Shot) {
