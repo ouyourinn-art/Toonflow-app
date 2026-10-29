@@ -141,6 +141,9 @@ export function buildImagePrompt(plan: OriginalPlan, shot: Shot, config: Origina
   const style = config.style ? `\n统一风格：${config.style}` : "";
   const explicit = shot.storyBeat === "explicitAction" || shot.storyBeat === "escalation" || shot.storyBeat === "climax";
   const adult = config.adultExplicit ? `\n${adultDirection}${explicit ? `\n${adultAnatomyDirection}` : ""}` : "";
+  const firstFrameContract = config.adultExplicit && explicit
+    ? "\n成人高光首帧硬约束：本图必须从本镜已经发生的明确成人动作开始，直接以骨盆与交合连接区域的清晰极近景为唯一主体；构图严格裁在两人下肋以下至大腿中段之间，禁止露脸、全身、站立、牵手、穿衣靠近、脱衣过程、拥抱、亲吻或只拍脸的过渡首帧。男性耻骨区、阴茎根部至龟头、女性阴阜、外阴与阴道口必须完整入画、无遮挡、不裁切，手部和衣物不得覆盖连接点。若下方‘本镜第一帧’文字与本硬约束冲突，以本硬约束为准；人物身份仍以人物母版锁定。"
+    : "";
   const referenceLines = references.map((id, index) => {
     if (id.startsWith("asset:")) {
       const assetId = id.slice("asset:".length);
@@ -154,7 +157,7 @@ ${ratioInstruction(config)}
 ${exactCastBlock(plan, shot)}
 参考图优先级从高到低，人物身份母版始终高于连续帧或场景图：
 ${referenceLines.join("\n")}
-本镜第一帧：${shot.imagePrompt}
+本镜第一帧：${shot.imagePrompt}${firstFrameContract}
 开始状态：${shot.startState || "按完整剧本承接"}${style}${adult}
 ${exclusionBlock(shot)}`;
 }
