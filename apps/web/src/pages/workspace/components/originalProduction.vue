@@ -40,6 +40,12 @@
               <el-select v-model="videoValue" filterable placeholder="选择支持图片参考的视频模型">
                 <el-option v-for="model in videoModels" :key="modelValue(model)" :value="modelValue(model)" :label="`${model.label} · ${model.providerLabel}`" />
               </el-select>
+              <div class="priceSync">
+                <el-button text size="small" :loading="priceLoading" :disabled="!selectedVideo || selectedVideo.supportsPrice !== true" @click="syncVideoPrice">同步模型原价</el-button>
+                <span v-if="videoPrice">原价：{{ videoPrice.price }}</span>
+                <span v-else-if="selectedVideo && selectedVideo.supportsPrice !== true">该供应商未提供预估接口，实际费用按供应商原价结算。</span>
+                <span v-else-if="priceError" class="errorText">{{ priceError }}</span>
+              </div>
             </el-form-item>
             <el-form-item label="固定角色数"><el-input-number v-model="form.characterCount" :min="1" :max="20" :precision="0" /></el-form-item>
             <el-form-item label="镜头数"><el-input-number v-model="form.shotCount" :min="1" :max="form.productionMode === 'long' ? 240 : 60" :precision="0" :disabled="form.productionMode === 'long'" /></el-form-item>
@@ -148,6 +154,9 @@ const models = shallowRef<MediaModel[]>([]);
 const languageValue = ref("");
 const imageValue = ref("");
 const videoValue = ref("");
+const videoPrice = ref<{ price: string; tips: string } | null>(null);
+const priceError = ref("");
+const priceLoading = ref(false);
 type ProductionForm = Omit<OriginalConfig, "language" | "image" | "video">;
 const form = reactive<ProductionForm>({
   productionMode: "short", brief: props.brief, style: "电影写实", characterCount: 3, shotCount: 6,
@@ -260,6 +269,30 @@ async function loadModels() {
 function selection(value: string) {
   const [providerId, modelId] = JSON.parse(value) as [string, string];
   return { providerId, modelId };
+}
+
+async function syncVideoPrice() {
+  const model = selectedVideo.value;
+  if (!model || model.supportsPrice !== true || priceLoading.value) return;
+  priceLoading.value = true;
+  priceError.value = "";
+  try {
+    const { data } = await axios.post<{ code: number; data: { price: string; tips: string } | null; message: string }>("/api/ai/media/price", {
+      directory: props.directory,
+      mediaType: "video",
+      providerId: model.providerId,
+      modelId: model.modelId,
+      prompt: "price estimate",
+      ratio: form.ratio,
+      duration: form.duration,
+      resolution: form.resolution,
+    }, { headers, signal: lifetime.signal });
+    if (data.code !== 200) throw new Error(data.message || "模型原价查询失败");
+    videoPrice.value = data.data;
+    if (!data.data) priceError.value = "当前参数组合暂无原价返回，实际费用按供应商结算。";
+  } catch (error) {
+    if (!lifetime.signal.aborted) priceError.value = errorMessage(error);
+  } finally { priceLoading.value = false; }
 }
 
 function applyAdult120Preset() {
@@ -388,6 +421,10 @@ watch(modelChoices, choices => {
 watch(ratios, values => { if (!values.includes(form.ratio) && values[0]) form.ratio = values[0]; });
 watch(durations, values => { if (!values.includes(form.duration)) form.duration = values.includes(15) ? 15 : values[0] ?? 0; });
 watch(resolutions, values => { if (!values.includes(form.resolution)) form.resolution = values[0] ?? ""; });
+watch([selectedVideo, () => form.ratio, () => form.duration, () => form.resolution], () => {
+  videoPrice.value = null;
+  priceError.value = "";
+});
 watch(() => [form.productionMode, form.targetDurationMinutes, form.duration] as const, ([mode, minutes, duration], previous) => {
   if (mode !== "long" || !duration) return;
   form.shotCount = Math.ceil(minutes * 60 / duration);

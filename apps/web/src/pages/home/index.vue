@@ -57,6 +57,9 @@
               <button v-for="mode in originalModes" :key="mode.id" class="modeCard" :class="{ selected: creationMode === mode.id }" type="button" :aria-pressed="creationMode === mode.id" @click="creationMode = mode.id">
                 <strong>{{ mode.label }}</strong><span>{{ mode.description }}</span>
               </button>
+              <button class="modeCard workflowCard" type="button" @click="launchOneClickWorkflow">
+                <strong>一键制作成片</strong><span>完整剧本 → 人物与场景资产 → 分镜图 → 视频 → 合成成片。</span>
+              </button>
               <button class="modeCard" type="button" @click="scrollToSection('projects')"><strong>继续项目</strong><span>打开已保存的剧本、画布和素材。</span></button>
             </div>
             <div class="promptArea">
@@ -274,6 +277,12 @@ function scrollToSection(section: string) {
     top: section === "home" ? 0 : wrap.scrollTop + target.getBoundingClientRect().top - wrap.getBoundingClientRect().top - 32,
     behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
   });
+}
+
+function launchOneClickWorkflow() {
+  creationMode.value = "original";
+  scrollToSection("home");
+  void nextTick(() => promptInput.value?.focus());
 }
 
 function updateActiveSection() {
@@ -504,6 +513,7 @@ async function createProject(fromPrompt = true) {
       &.selected, &:hover, &:focus-visible { border-color: var(--el-color-primary); outline-color: var(--el-color-primary); }
       &.selected { background: var(--el-color-primary-light-9); }
     }
+    .workflowCard { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
     @media (max-width: 700px) { grid-template-columns: 1fr; }
   }
   --sidebarWidth: 240px;
