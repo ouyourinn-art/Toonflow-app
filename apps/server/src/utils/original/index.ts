@@ -187,6 +187,47 @@ function reinforceAdultSingleShot(plan: OriginalPlan, config: OriginalConfig) {
   shot.videoPrompt = `严格生成 ${config.duration} 秒竖屏 9:16 单镜连续写实视频。首帧及全段均为床面骨盆高度的交合极近景，只显示两名原创虚构成年人的下腹部、耻骨区、大腿根部和阴茎插入阴道的真实连接，不移动到脸部。${shot.action} 动作必须来自男性骨盆沿阴茎轴线的前后位移，摄影机固定不动；不得用画面缩放、镜头前后推拉、身体整体漂移或阴茎长度伸缩来伪装抽插。后撤和推进的位移幅度必须肉眼清楚可辨，同时保持阴茎来源、阴道口位置和插入轴线不变。真实皮肤、毛发、接触阴影、组织压痕和床单摩擦连续变化。禁止假体感、塑料或橡胶质感、器官悬浮、脱体、错误生长位置、错误孔位、重复生殖器、异常膨胀、阴茎伸缩变长、穿模、融合、突然消失、突然出现、遮挡关键部位、镜头切换、拉远或上移。`;
 }
 
+function reinforceAdultMinutePlan(plan: OriginalPlan, config: OriginalConfig) {
+  if (!config.adultExplicit || config.shotCount !== 4 || config.duration !== 15) return;
+  const beats = ["explicitAction", "escalation", "climax", "aftermath"] as const;
+  const purposes = [
+    "立即建立真实、自愿的性交动作与两名成年角色的身体关系；采用侧前方近景，清楚展示明显大于平均但比例真实的阴茎与正确插入连接。",
+    "通过自然体位转换升级节奏；女性主动转为上位，保持两人身份、卧室空间、生殖器来源与插入轴线连续。",
+    "进入全片最强动作段；采用后侧斜角近景，清楚展示骨盆往复、阴茎根部来源、外阴包覆和完整插入轴线。",
+    "用床面骨盆高度的无遮挡极近景完成高光与收束；前 12 秒保持清楚完整抽插，最后 3 秒逐渐放缓并保持真实连接。",
+  ];
+  const framings = [
+    "竖屏 9:16，床侧低机位近景，画面覆盖两人的下腹、髋部、腿根和部分胸腹；机位固定，真实插入点清楚可见。",
+    "竖屏 9:16，床尾略低于骨盆的中近景，女性上位居中、男性仰卧；完整看到女性骨盆上下运动、男性耻骨区和交合部位。",
+    "竖屏 9:16，后侧 45 度骨盆近景，固定焦距；画面集中在两人的腰臀、腿根、阴茎根部与阴道口，不拍成远景。",
+    "竖屏 9:16，床面骨盆高度的极近景，阴茎根部、阴茎体、龟头、外阴唇与阴道口持续处于清晰焦平面；摄影机固定不动。",
+  ];
+  const actions = [
+    "0-2 秒：从双方已经清醒自愿并保持真实插入的状态开始。2-12 秒：男性骨盆沿固定插入轴线完成至少 5 次清楚完整的后撤与推进，后撤露出更多阴茎体但龟头仍留在阴道口，推进时沿同一阴道口重新进入。12-15 秒：节奏稍快再完成 2 次完整往复，并在保持连接的状态准备转换体位。",
+    "0-3 秒：女性用手支撑并主动跨坐到男性骨盆上方，阴茎始终从男性耻骨区自然延伸并保持正确连接。3-12 秒：女性骨盆完成至少 5 次清楚的上下起伏，每次抬起露出更多阴茎体、下落沿同一阴道口进入；男性双手稳定扶住她的腰。12-15 秒：女性减慢并前倾，准备转向下一姿势。",
+    "0-2 秒：双方完成自然转身，保持同一卧室和明确自愿。2-12 秒：后侧斜角下，男性骨盆沿同一真实轴线完成至少 6 次幅度清楚的前后抽插；阴茎长度和形态保持不变，只有骨盆整体移动。12-15 秒：节奏达到本片高点，再完成 2 次完整往复。",
+    "0-2 秒：固定床面骨盆极近景建立正确插入位置。2-12 秒：至少完成 6 次肉眼清楚可辨的完整抽插循环，摄影机和焦距完全固定；每次后撤与推进都由骨盆整体沿轴线移动。12-14 秒：再完成 2 次较快但完整的往复。14-15 秒：动作放缓，在仍保持部分插入、解剖连接稳定的状态结束。",
+  ];
+  for (const [index, shot] of plan.shots.entries()) {
+    shot.storyBeat = beats[index]!;
+    shot.shotPurpose = purposes[index]!;
+    shot.framing = framings[index]!;
+    shot.action = actions[index]!;
+    shot.dialogue = "";
+    shot.startState = index === 0
+      ? "两名明确 25 岁以上的原创虚构成年人已在镜外完成清醒、自愿和边界确认；同一暖光卧室、同一床铺，双方全裸并保持真实插入。"
+      : `无缝承接上一镜结束状态，在同一床铺和暖光下完成第 ${index + 1} 镜的体位转换；人物身份、肤色、体型、发型和生殖器来源不变。`;
+    shot.endState = index === 3
+      ? "动作放缓后两人仍保持身体贴合与部分插入，呼吸逐渐平稳；解剖结构、人物身份和卧室光线保持稳定。"
+      : `本镜动作结束但身体连接不断，保留清楚的骨盆方向与手脚位置，为第 ${index + 2} 镜体位转换提供连续起点。`;
+    shot.continuity = "固定同一对角色、同一床铺、同一暖光、同一肤色和身体标记；转场只改变机位和体位，不新增人物，不换脸，不改变生殖器尺寸、来源或解剖结构。";
+    shot.imagePrompt = `${framings[index]} 两名明确成年且自愿的原创虚构角色，全裸、真实电影摄影。男性阴茎明显大于平均但仍符合成年人体比例，从男性耻骨区自然延伸，根部、阴茎体、冠状沟和龟头连续真实；女性阴阜、外阴唇和阴道口结构自然。阴茎沿与女性骨盆一致的轴线真实进入唯一正确的阴道口，插入点无遮挡、未裁切、准确对焦；真实皮肤纹理、毛发、接触阴影和轻微组织压痕。严格排除假体感、塑料或橡胶质感、异常膨胀、器官伸缩、悬浮、脱体、错误孔位、重复生殖器、穿模、额外肢体和腿部遮挡。`;
+    shot.videoPrompt = `严格生成 15 秒竖屏单镜连续写实视频。${actions[index]} 动作来自骨盆整体移动，摄影机和焦距固定；不得用画面缩放、镜头推拉、身体漂移或阴茎长度伸缩冒充动作。男性阴茎明显大于平均但保持真实成年比例、固定长度和粗细，始终从男性耻骨区自然延伸并沿唯一正确的阴道口轴线移动。真实皮肤、毛发、接触阴影、组织压痕和床单摩擦连续变化。禁止假体感、器官悬浮、脱体、错误孔位、融合、重复器官、突然变形、遮挡关键部位或切镜。`;
+  }
+  plan.shots[0]!.framing = "竖屏 9:16，床面骨盆高度固定机位的交合极近景；只覆盖两名成年人的下腹、耻骨区、大腿根部和连接部位，阴茎根部、阴茎体、外阴唇与阴道口准确对焦。";
+  plan.shots[0]!.imagePrompt = "竖屏 9:16、电影级写实摄影、床面骨盆高度的交合极近景。画面只覆盖两名原创虚构成年人的下腹部、耻骨区、大腿根部和交合部位，不出现脸。男性位于右侧，阴茎从男性耻骨区自然延伸，根部与腹股沟皮肤连续；阴茎明显大于平均但仍符合真实成年人体比例，阴茎体、冠状沟和龟头比例真实。女性位于左侧，阴阜、外阴唇和阴道口结构自然清楚。龟头与部分阴茎体已通过外阴唇真实进入唯一正确的阴道口，插入轴线与女性骨盆角度一致。真实皮肤纹理、毛发、接触阴影和轻微组织压痕，连接处无遮挡、未裁切、准确对焦。严格排除假阳具、塑料或橡胶质感、异常膨胀、器官伸缩、悬浮、脱体、错误孔位、器官融合、重复生殖器、穿模、额外肢体和腿部遮挡。";
+}
+
 function buildShortMediaTasks(plan: OriginalPlan, config: OriginalConfig): OriginalTask[] {
   const tasks: OriginalTask[] = plan.assets.map(asset => ({
     id: `asset:${asset.id}`, kind: "asset", label: `${asset.kind === "character" ? "角色" : "场景"}：${asset.name}`, status: "pending",
@@ -196,12 +237,17 @@ function buildShortMediaTasks(plan: OriginalPlan, config: OriginalConfig): Origi
     const index = plan.shots.indexOf(shot);
     return config.continuousShots ? plan.shots.slice(0, index).findLast(item => item.sceneId === shot.sceneId) : undefined;
   };
-  tasks.push(...plan.shots.map<OriginalTask>(shot => {
+  const sharedAdultAnchor = config.adultExplicit && config.shotCount === 4 && config.duration === 15 ? plan.shots[0] : undefined;
+  const imageShots = sharedAdultAnchor ? [sharedAdultAnchor] : plan.shots;
+  tasks.push(...imageShots.map<OriginalTask>(shot => {
     const previous = previousShot(shot);
     const references = [...shot.characterIds.map(id => `asset:${id}`), previous ? `image:${previous.id}` : `asset:${shot.sceneId}`];
     return { id: `image:${shot.id}`, kind: "image", label: `分镜图：${shot.title}`, status: "pending", sceneId: shot.sceneId, prompt: buildImagePrompt(plan, shot, config, references), references };
   }));
-  tasks.push(...plan.shots.map<OriginalTask>(shot => ({ id: `video:${shot.id}`, kind: "video", label: `镜头视频：${shot.title}`, status: "pending", sceneId: shot.sceneId, attempts: 0, prompt: buildVideoPrompt(plan, shot, config), references: [`image:${shot.id}`] })));
+  tasks.push(...plan.shots.map<OriginalTask>(shot => ({
+    id: `video:${shot.id}`, kind: "video", label: `镜头视频：${shot.title}`, status: "pending", sceneId: shot.sceneId, attempts: 0,
+    prompt: buildVideoPrompt(plan, shot, config), references: [`image:${sharedAdultAnchor?.id ?? shot.id}`],
+  })));
   if (config.faceQaEnabled) tasks.push(...plan.shots.filter(shot => shot.characterIds.length && faceQaApplicable(shot)).map<OriginalTask>(shot => ({
     id: `qa:${shot.id}`, kind: "qa", label: `人物一致性质检：${shot.title}`, status: "pending", sceneId: shot.sceneId,
     references: [`video:${shot.id}`, ...shot.characterIds.map(id => `asset:${id}`)],
@@ -242,6 +288,7 @@ async function planStory(cwd: string, state: OriginalRun) {
     shot.endSecond = shot.startSecond + config.duration;
   }
   reinforceAdultSingleShot(plan, config);
+  reinforceAdultMinutePlan(plan, config);
   validatePlan(plan, config);
   await write(cwd, `${runDirectory(state)}/plan.json`, JSON.stringify(plan, null, 2));
   state.jsonFiles = [`${runDirectory(state)}/plan.json`];

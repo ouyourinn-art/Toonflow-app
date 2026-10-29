@@ -7,15 +7,19 @@ export type StoryBeat = NonNullable<Shot["storyBeat"]>;
 const regionNames = { leftThird: "竖屏左侧三分区", centerThird: "竖屏中央三分区", rightThird: "竖屏右侧三分区" } as const;
 
 export const adultDirection = "所有角色均为明确 25 岁以上的原创虚构成年人，清醒、知情且自愿。直接、具体、生动地设计裸体和双方自愿的性行为；画面提示词明确生殖器持续清晰可见、性交动作与插入关系可辨认，不遮挡、不裁切关键部位，也不以亲吻或拥抱代替指定行为。禁止未成年人或年龄模糊者、强迫、迷奸、昏迷、偷窥、乱伦、暴力、非人动物和真实人物仿造。";
-export const adultAnatomyDirection = "真实人体解剖硬约束：阴茎必须从男性耻骨区自然延伸，根部、阴茎体、冠状沟和龟头比例连续真实；女性阴阜、外阴唇与阴道口位置和层次符合成年人体结构。插入点只能位于阴道口，阴茎轴线、女性骨盆角度和进入方向必须一致，并保留真实的皮肤接触阴影、轻微压痕与组织连续性。严格禁止假阳具或塑料质感、橡胶管状阴茎、阴茎悬浮或脱离身体、阴茎从大腿或腹部错误长出、插入大腿或臀部、错误孔位、器官融合、重复生殖器、异常尺寸、穿模、肢体黏连和人体蜡像感。";
+export const adultAnatomyDirection = "真实人体解剖硬约束：阴茎必须从男性耻骨区自然延伸，根部、阴茎体、冠状沟和龟头比例连续真实；女性阴阜、外阴唇与阴道口位置和层次符合成年人体结构。插入点只能位于阴道口，阴茎轴线、女性骨盆角度和进入方向必须一致，并保留真实的皮肤接触阴影、轻微压痕与组织连续性。允许按创作需求呈现明显大于平均但仍符合成年人体比例的阴茎；严格禁止假阳具或塑料质感、橡胶管状阴茎、阴茎悬浮或脱离身体、阴茎从大腿或腹部错误长出、插入大腿或臀部、错误孔位、器官融合、重复生殖器、解剖学不可能的夸张尺寸、穿模、肢体黏连和人体蜡像感。";
 
 export function explicitStartShot(config: OriginalConfig) {
   if (config.adultExplicit && config.shotCount === 1) return 0;
+  if (config.adultExplicit && config.shotCount <= 4) return 0;
   return Math.max(2, Math.ceil(config.shotCount * 0.15));
 }
 
 export function storyBeatOrder(config: OriginalConfig): StoryBeat[] {
   if (config.adultExplicit && config.shotCount === 1) return ["explicitAction"];
+  if (config.adultExplicit && config.shotCount === 2) return ["explicitAction", "aftermath"];
+  if (config.adultExplicit && config.shotCount === 3) return ["explicitAction", "climax", "aftermath"];
+  if (config.adultExplicit && config.shotCount === 4) return ["explicitAction", "escalation", "climax", "aftermath"];
   return config.adultExplicit
     ? ["setup", "consent", "explicitAction", "escalation", "climax", "aftermath"]
     : ["setup", "escalation", "climax", "aftermath"];
@@ -24,6 +28,12 @@ export function storyBeatOrder(config: OriginalConfig): StoryBeat[] {
 export function storyArcInstruction(config: OriginalConfig) {
   if (config.adultExplicit && config.shotCount === 1) {
     return `这是单镜成人高光实验，storyBeat 固定为 explicitAction。必须在同一镜头内部按秒完成：开头快速确认双方清醒自愿 → 进入明确成人动作 → 动作与情绪达到高点 → 结尾留下清楚余韵。shotPurpose、framing、action、imagePrompt 和 videoPrompt 必须清楚呈现双方自愿的性交与插入关系，并至少包含一个无遮挡的生殖器细节特写；不能用亲吻、拥抱、远景或镜外暗示替代。`;
+  }
+  if (config.adultExplicit && config.shotCount === 4) {
+    return `这是成人高光短片，双方已在镜外完成清醒、自愿与边界确认；不得再消耗整镜做铺垫。四镜依次为 explicitAction（立即进入清楚的性交动作）→ escalation（更换姿势并升级节奏）→ climax（无遮挡生殖器特写与最强动作）→ aftermath（前段继续动作，末段自然放缓收束）。每镜都要有不同但因果连续的姿势、机位或动作重点，至少三镜清楚呈现真实插入关系，不能用亲吻、拥抱或远景替代。`;
+  }
+  if (config.adultExplicit && config.shotCount <= 3) {
+    return `这是成人高光短片，双方已在镜外完成清醒、自愿与边界确认；不得再消耗整镜做铺垫。第一镜立即进入明确成人动作，最后一镜在前段继续动作、末段自然放缓收束；至少一镜清楚呈现真实插入关系与无遮挡生殖器特写，不能用亲吻、拥抱或远景替代。`;
   }
   const beats = config.adultExplicit
     ? "setup（立即建立人物、关系与欲望）→ consent（明确清醒自愿）→ explicitAction（进入初次明确成人动作，形成开场小高潮）→ escalation（持续升级动作与情绪）→ climax（全片主高潮）→ aftermath（有因果结果的余韵）"
