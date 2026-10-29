@@ -9,8 +9,8 @@
       <template v-if="editing">
         <div class="presetGrid">
           <div class="presetBar">
-            <div><strong>韩国成人露骨 2 分钟竖屏短片</strong><span>原创虚构韩国成年人，8 镜 × 15 秒，人物母版锁定，图片 6 路、视频 4 路并发。</span></div>
-            <el-button type="danger" size="large" :disabled="busy || !statusReady" @click="applyAdult120Preset">套用 2 分钟</el-button>
+            <div><strong>韩国成人剧情 1 分钟竖屏短片</strong><span>原创虚构韩国成年人，12 镜 × 5 秒，先剧情再升级，多体位、多视角、每镜独立首帧。</span></div>
+            <el-button type="danger" size="large" :disabled="busy || !statusReady" @click="applyAdult60Preset">套用 1 分钟</el-button>
           </div>
           <div class="presetBar longPreset">
             <div><strong>韩国成人露骨 10 分钟竖屏长片</strong><span>原创虚构韩国成年人，40 镜 × 15 秒，分场锚定、逐镜验脸、跨场并发。</span></div>
@@ -305,13 +305,13 @@ async function syncVideoPrice() {
   } finally { priceLoading.value = false; }
 }
 
-function applyAdult120Preset() {
+function applyAdult60Preset() {
   Object.assign(form, {
     productionMode: "short",
-    style: "原创虚构韩国成年人，现代韩国人物造型与环境细节，不仿照真实人物；成熟二次元成人动画，电影级柔光，稳定一致的角色设计，连贯空间与镜头语言",
-    characterCount: 3, shotCount: 8, ratio: "9:16", duration: 15, stitch: true,
+    style: "原创虚构韩国成年人，现代韩国人物造型与环境细节，不仿照真实人物；电影级写实摄影、暖色自然光、真实皮肤纹理，固定角色设计，连贯卧室空间和专业剧情镜头语言",
+    characterCount: 2, shotCount: 12, ratio: "9:16", duration: 5, stitch: true,
     targetDurationMinutes: 10, sceneCount: 1, maxRetries: 2, costLimit: 0, costPerVideo: 2.01,
-    faceQaEnabled: true, faceThreshold: 0.363, adultExplicit: true, characterLock: true, continuousShots: false,
+    faceQaEnabled: true, faceThreshold: 0.363, adultExplicit: true, characterLock: true, continuousShots: true,
     imageConcurrency: 6, videoConcurrency: 4,
   } satisfies Partial<ProductionForm>);
   selectAdultModels();
@@ -322,7 +322,7 @@ function selectAdultModels() {
     ?? videoModels.value.find(model => isAdultWhiteModel(model));
   if (video) {
     videoValue.value = modelValue(video);
-    const choices = video.durationResolutionMap?.filter(item => item.duration.includes(15)).flatMap(item => item.resolution) ?? [];
+    const choices = video.durationResolutionMap?.filter(item => item.duration.includes(form.duration)).flatMap(item => item.resolution) ?? [];
     form.resolution = choices.includes("480p") ? "480p" : choices[0] ?? "";
   }
   const image = imageModels.value.find(model => model.modelId.trim().toLowerCase() === "dola-seedream-5.0-pro-white")
