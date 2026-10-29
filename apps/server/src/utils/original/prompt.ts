@@ -142,7 +142,7 @@ export function buildImagePrompt(plan: OriginalPlan, shot: Shot, config: Origina
   const explicit = shot.storyBeat === "explicitAction" || shot.storyBeat === "escalation" || shot.storyBeat === "climax";
   const adult = config.adultExplicit ? `\n${adultDirection}${explicit ? `\n${adultAnatomyDirection}` : ""}` : "";
   const firstFrameContract = config.adultExplicit && explicit
-    ? "\n成人高光首帧硬约束：本图必须从本镜已经发生的明确成人动作开始，直接以骨盆与交合连接区域的清晰极近景为唯一主体；构图严格裁在两人下肋以下至大腿中段之间，禁止露脸、全身、站立、牵手、穿衣靠近、脱衣过程、拥抱、亲吻或只拍脸的过渡首帧。男性耻骨区、阴茎根部至龟头、女性阴阜、外阴与阴道口必须完整入画、无遮挡、不裁切，手部和衣物不得覆盖连接点。若下方‘本镜第一帧’文字与本硬约束冲突，以本硬约束为准；人物身份仍以人物母版锁定。"
+    ? "\n成人动作首帧硬约束：本图从本镜成人动作的解剖正确起点开始，以双方骨盆与接触轴线为主体；允许呈现进入前的准确对准、自然接触或浅插入，不强迫静态图制造深度交合。构图纳入男性下腹、耻骨与阴茎根部，以及女性骨盆、阴阜、外阴和唯一阴道口，必须能确认每个器官属于正确身体、轴线一致、没有悬浮、融合、重复器官或错误孔位。手部和衣物不得遮挡关键来源与接触区域。真正的进入与连续往复由后续视频动作合同完成，并由视频内容 QA 验证；人物身份仍以人物母版锁定。若下方‘本镜第一帧’文字要求不可能的深度插入，以本硬约束的解剖正确起点为准。"
     : "";
   const referenceLines = references.map((id, index) => {
     if (id.startsWith("asset:")) {

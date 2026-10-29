@@ -323,6 +323,134 @@ function buildMediaTasks(plan: OriginalPlan, config: OriginalConfig) {
   return config.productionMode === "long" ? buildLongMediaTasks(plan, config) : buildShortMediaTasks(plan, config);
 }
 
+const compactAdultPlanSchema = z.strictObject({
+  title: z.string().trim().min(1).max(200),
+  synopsis: z.string().trim().min(1).max(4000),
+  theme: z.string().trim().min(1).max(1000),
+  obstacle: z.string().trim().min(1).max(2000),
+  relationshipResult: z.string().trim().min(1).max(2000),
+  characters: z.array(z.strictObject({
+    id: z.string().regex(/^[a-z][a-zA-Z0-9]{0,63}$/),
+    name: z.string().trim().min(1).max(100),
+    aliases: z.array(z.string().trim().min(1).max(100)).max(10),
+    description: z.string().trim().min(1).max(2500),
+  })).min(1).max(20),
+  scene: z.strictObject({
+    id: z.string().regex(/^[a-z][a-zA-Z0-9]{0,63}$/),
+    name: z.string().trim().min(1).max(100),
+    description: z.string().trim().min(1).max(3000),
+  }),
+  shots: z.array(z.strictObject({
+    id: z.string().regex(/^[a-z][a-zA-Z0-9]{0,63}$/),
+    title: z.string().trim().min(1).max(200),
+    characterIds: z.array(z.string().regex(/^[a-z][a-zA-Z0-9]{0,63}$/)).min(1).max(3),
+    shotPurpose: z.string().trim().min(1).max(1500),
+    framing: z.string().trim().min(1).max(1000),
+    action: z.string().trim().min(1).max(4000),
+    dialogue: z.string().max(2000),
+    startState: z.string().trim().min(1).max(3000),
+    endState: z.string().trim().min(1).max(3000),
+  })).min(1).max(60),
+});
+
+type CompactAdultPlan = z.infer<typeof compactAdultPlanSchema>;
+
+function compactAdultDurations(config: OriginalConfig) {
+  const minimum = shortShotDurations[0];
+  const maximum = shortShotDurations.at(-1)!;
+  const target = config.shotCount * config.duration;
+  if (config.shotCount * minimum > target || config.shotCount * maximum < target) fail(`目标总时长 ${target} 秒无法分配给 ${config.shotCount} 镜`);
+  const durations = Array.from({ length: config.shotCount }, () => minimum);
+  let remaining = target - durations.reduce((sum, value) => sum + value, 0);
+  // 保持 setup + consent 在 8 秒内完成，把额外容量优先留给动作升级、高潮和余韵。
+  const candidates = Array.from({ length: config.shotCount }, (_, index) => index)
+    .filter(index => index >= Math.min(2, config.shotCount - 1))
+    .sort((left, right) => {
+      const center = Math.max(2, config.shotCount - 2);
+      return Math.abs(left - center) - Math.abs(right - center);
+    });
+  while (remaining > 0) {
+    let changed = false;
+    for (const index of candidates) {
+      if (durations[index]! >= maximum) continue;
+      durations[index]!++;
+      remaining--;
+      changed = true;
+      if (!remaining) break;
+    }
+    if (!changed) fail(`无法把成人短片镜长校准到 ${target} 秒`);
+  }
+  return durations;
+}
+
+function hydrateCompactAdultPlan(value: CompactAdultPlan, config: OriginalConfig): OriginalPlan {
+  if (value.characters.length !== config.characterCount) fail(`精炼剧本返回 ${value.characters.length} 个角色，要求为 ${config.characterCount} 个`);
+  if (value.shots.length !== config.shotCount) fail(`精炼剧本返回 ${value.shots.length} 镜，要求为 ${config.shotCount} 镜`);
+  const characterIds = new Set(value.characters.map(character => character.id));
+  if (characterIds.size !== value.characters.length || characterIds.has(value.scene.id)) fail("精炼剧本的角色或场景 ID 重复");
+  const requiredBeats = storyBeatOrder(config);
+  if (requiredBeats.length > config.shotCount) fail(`当前 ${config.shotCount} 镜不足以覆盖 ${requiredBeats.join(" → ")}`);
+  const beats = Array.from({ length: config.shotCount }, (_, index) => {
+    if (index < 3) return requiredBeats[index]!;
+    if (index === config.shotCount - 1) return requiredBeats.at(-1)!;
+    if (index === config.shotCount - 2) return requiredBeats.at(-2)!;
+    return requiredBeats[Math.min(3, requiredBeats.length - 3)]!;
+  });
+  const durations = compactAdultDurations(config);
+  const assets: OriginalPlan["assets"] = [
+    ...value.characters.map(character => ({
+      id: character.id, kind: "character" as const, name: character.name, aliases: character.aliases,
+      description: character.description,
+      imagePrompt: `原创虚构成年角色 ${character.name} 的身份母版。${character.description}。保持脸型、五官、发型、肤色、体型、身体比例与唯一标记完全固定。`,
+    })),
+    {
+      id: value.scene.id, kind: "scene" as const, name: value.scene.name, aliases: [],
+      description: value.scene.description,
+      imagePrompt: `无人场景锚点：${value.scene.description}。固定空间布局、床铺、门窗、手机与暖光方向，供全片连续镜头复用。`,
+    },
+  ];
+  let startSecond = 0;
+  const shots: OriginalPlan["shots"] = value.shots.map((source, index, all) => {
+    if (new Set(source.characterIds).size !== source.characterIds.length || source.characterIds.some(id => !characterIds.has(id))) fail(`精炼分镜 ${source.id} 引用了无效角色`);
+    const storyBeat = beats[index]!;
+    const duration = durations[index]!;
+    const previous = index > 0 ? all[index - 1] : undefined;
+    const startState = previous ? previous.endState : source.startState;
+    const endState = source.endState;
+    const explicit = ["explicitAction", "escalation", "climax"].includes(storyBeat);
+    const explicitContract = explicit
+      ? "双方均为明确30岁以上、清醒知情且自愿的原创虚构成年人；本镜直接呈现符合真实人体结构的性交与插入关系、无遮挡生殖器细节和由人物骨盆整体运动产生的连续往复，严禁器官自身伸缩、漂浮、错误孔位、融合、重复器官与穿模。"
+      : "保持人物身份、服装进度、手机位置、床铺褶皱、光线方向和镜头轴线连续。";
+    const regions = source.characterIds.length === 1 ? ["centerThird"] as const : ["leftThird", "rightThird", "centerThird"] as const;
+    const characterLayout = source.characterIds.map((characterId, layoutIndex) => ({
+      characterId,
+      screenRegion: regions[layoutIndex]!,
+      position: `${startState}；角色保持在竖屏${regions[layoutIndex]}安全区内，不与另一角色融合。`,
+      facing: layoutIndex === 0 ? "朝向另一角色并保持脸部身份可辨" : "朝向第一角色并保持视线、动作轴线连续",
+    }));
+    const shot: OriginalPlan["shots"][number] = {
+      id: source.id, title: source.title, sceneId: value.scene.id, characterIds: source.characterIds,
+      startSecond, endSecond: startSecond + duration, storyBeat,
+      shotPurpose: `${source.shotPurpose}${explicit ? "；清楚完成指定成人动作，不以亲吻、拥抱、远景或镜外暗示替代" : ""}`,
+      timingReason: `${duration} 秒容纳本镜的对白、反应与连续动作拍，并保证全片严格 ${config.shotCount * config.duration} 秒。`,
+      framing: `${source.framing}${storyBeat === "explicitAction" ? "；无遮挡的生殖器与插入连接极近景特写" : ""}`,
+      characterLayout,
+      action: `${source.action} ${explicitContract}`,
+      dialogue: source.dialogue,
+      startState, endState,
+      continuity: index === 0 ? "首镜建立固定人物、空间、道具和暖光基准。" : `逐字继承上一镜 endState；${source.shotPurpose}`,
+      imagePrompt: `${source.framing}。第一帧状态：${startState}。${explicitContract}`,
+      videoPrompt: `在 ${duration} 秒内从“${startState}”连续发展到“${endState}”。动作：${source.action}。${explicitContract} 不跳切、不重置人物或场景。`,
+    };
+    startSecond += duration;
+    return shot;
+  });
+  const cast = value.characters.map(character => `${character.name}：${character.description}`).join("\n");
+  const beatsText = shots.map((shot, index) => `△${shot.startSecond}-${shot.endSecond}秒 ${shot.title}：${shot.action}\n${value.characters.find(item => item.id === shot.characterIds[0])?.name ?? "人物"}：${shot.dialogue || "（无台词，以动作与呼吸推进）"}\n转折/卡点：${shot.shotPurpose}`).join("\n");
+  const script = `作品名 EP001：${value.title}\n目标时长 / 画幅 / 视觉风格：${config.shotCount * config.duration} 秒 / ${config.ratio} / ${config.style || "电影写实"}\n剧情母题：${value.theme}\n剧情梗概：${value.synopsis}\n人物小传：\n${cast}\n\n1-1 ${value.scene.name} 夜/内\n人物：${value.characters.map(item => item.name).join("、")}\n场景目标：在秘密关系的倒计时中完成一次清醒、自愿且改变关系的选择。\n阻碍：${value.obstacle}\n${beatsText}\n场景结果：${value.relationshipResult}\n[动作与视线连续转场]\n---\n本集结束点：${value.relationshipResult}`;
+  return originalPlanSchema.parse({ title: value.title, synopsis: value.synopsis, script, assets, shots });
+}
+
 async function planStory(cwd: string, state: OriginalRun) {
   const config = state.config;
   const identity = config.characterLock
@@ -334,7 +462,9 @@ async function planStory(cwd: string, state: OriginalRun) {
   const adult = config.adultExplicit
     ? adultDirection
     : "内容强度严格跟随用户创作需求，不自行添加露骨成人内容。";
-  const prompt = `根据创作需求写出连贯完整的短片剧本与可直接制作的分镜方案。\n需求：${config.brief}\n视觉风格：${config.style || "电影写实"}\n严格锁定 ${config.characterCount} 个角色、${config.shotCount} 个镜头；目标总时长 ${config.shotCount * config.duration} 秒，画幅 ${config.ratio}。系统配置的 ${config.ratio} 是唯一有效画幅，需求文字中的冲突画幅视为旧信息并忽略。\n${adult}\n${screenplayInstruction(config)}\n${config.adultExplicit ? adultStoryLibraryInstruction(config.brief) : ""}\n${storyArcInstruction(config)}\n${timingInstruction(config)}\n${identity}\n${continuity}\n先完成剧本，再从完整剧本整理唯一角色和场景资产，最后按本子中的因果和卡点拆分镜头；同一人的称呼、衣着或姿势变化不能拆成新角色，别名统一归入同一 ID。每镜最多 3 人，必须仅引用资产表中实际出场的角色 ID 和一个场景 ID。每镜填写 storyBeat、shotPurpose、timingReason、framing 和 characterLayout；timingReason 必须根据对白字数、动作拍数量和状态变化解释 endSecond-startSecond。characterLayout 必须与 characterIds 完全相同且每人绑定不同的 leftThird / centerThird / rightThird 竖屏区域，写明位置、姿势、朝向与视线。\nassets 的 description 写固定外观和服装或场景布局，imagePrompt 写资产图构图与光照。shots 的 imagePrompt 写本镜第一帧静态构图；videoPrompt 必须按本镜实际时长（endSecond-startSecond）逐段写从 startState 到 endState 的连续动作、运镜、节奏和声音。脱衣、转身、换位、进入、退出等复杂状态变化必须完整显示或拆成独立过渡镜，不能在镜外突然完成。不要把未出场角色、拼贴、字幕或提示词文字画进图。台词只写入 dialogue。\n只输出符合下列 JSON Schema 的一个 JSON 对象，不加代码围栏或解释：\n${JSON.stringify(z.toJSONSchema(originalPlanSchema))}`;
+  const fullPrompt = `根据创作需求写出连贯完整的短片剧本与可直接制作的分镜方案。\n需求：${config.brief}\n视觉风格：${config.style || "电影写实"}\n严格锁定 ${config.characterCount} 个角色、${config.shotCount} 个镜头；目标总时长 ${config.shotCount * config.duration} 秒，画幅 ${config.ratio}。系统配置的 ${config.ratio} 是唯一有效画幅，需求文字中的冲突画幅视为旧信息并忽略。\n${adult}\n${screenplayInstruction(config)}\n${config.adultExplicit ? adultStoryLibraryInstruction(config.brief) : ""}\n${storyArcInstruction(config)}\n${timingInstruction(config)}\n${identity}\n${continuity}\n先完成剧本，再从完整剧本整理唯一角色和场景资产，最后按本子中的因果和卡点拆分镜头；同一人的称呼、衣着或姿势变化不能拆成新角色，别名统一归入同一 ID。每镜最多 3 人，必须仅引用资产表中实际出场的角色 ID 和一个场景 ID。每镜填写 storyBeat、shotPurpose、timingReason、framing 和 characterLayout；timingReason 必须根据对白字数、动作拍数量和状态变化解释 endSecond-startSecond。characterLayout 必须与 characterIds 完全相同且每人绑定不同的 leftThird / centerThird / rightThird 竖屏区域，写明位置、姿势、朝向与视线。\nassets 的 description 写固定外观和服装或场景布局，imagePrompt 写资产图构图与光照。shots 的 imagePrompt 写本镜第一帧静态构图；videoPrompt 必须按本镜实际时长（endSecond-startSecond）逐段写从 startState 到 endState 的连续动作、运镜、节奏和声音。脱衣、转身、换位、进入、退出等复杂状态变化必须完整显示或拆成独立过渡镜，不能在镜外突然完成。不要把未出场角色、拼贴、字幕或提示词文字画进图。台词只写入 dialogue。\n只输出符合下列 JSON Schema 的一个 JSON 对象，不加代码围栏或解释：\n${JSON.stringify(z.toJSONSchema(originalPlanSchema))}`;
+  const compactPrompt = `你是成人剧情短片编剧。只做剧情与镜头决策，服务器会在本地补全时间轴、资产提示词和严格连续性合同。\n创作需求：${config.brief}\n视觉风格：${config.style || "电影写实"}\n必须恰好返回 ${config.characterCount} 名原创虚构、明确30岁以上、清醒知情且自愿的成年人，以及 ${config.shotCount} 个连续镜头、一个固定场景。人物描述必须包含不可变脸型、五官、发型发色、肤色、身高体型、身体比例和唯一标记。剧情采用 setup → consent → explicitAction → escalation → climax → aftermath：开头快速建立秘密、风险和主动选择；前8秒内完成明确同意并进入首次成人动作；中段升级；结尾必须有关系决定。动作镜要明确写出真实性交、插入关系、无遮挡生殖器细节、由人物骨盆整体运动产生的往复以及正确人体连接，不能只写亲吻、拥抱、躺床或镜外暗示；禁止器官自身伸缩、悬浮、错误孔位、重复器官、融合与穿模。严格只有指定角色，不出现第三人。每个 shot 的 startState/endState 都写人物位置、朝向、姿势、衣物状态、手脚、手机、床铺与光线；动作和台词要有因果，不能是同一画面的同义重复。\n${adultStoryLibraryInstruction(config.brief)}\n只输出一个精炼 JSON 对象，不加代码围栏或解释：\n${JSON.stringify(z.toJSONSchema(compactAdultPlanSchema))}`;
+  const prompt = config.adultExplicit ? compactPrompt : fullPrompt;
   state.tasks[0]!.prompt = prompt;
   await write(cwd, `${runDirectory(state)}/languagePrompt.txt`, prompt);
   if (config.adultExplicit) await write(cwd, `${runDirectory(state)}/adultStoryLibrary.json`, JSON.stringify(adultStoryLibrarySnapshot(config.brief), null, 2));
@@ -346,7 +476,10 @@ async function planStory(cwd: string, state: OriginalRun) {
   await write(cwd, `${runDirectory(state)}/planResponse.txt`, text);
   if (message.stopReason !== "stop") throw new Error(message.errorMessage || `剧本请求未正常结束：${message.stopReason}`);
   state.usage = { input: message.usage.input, output: message.usage.output, totalTokens: message.usage.totalTokens };
-  const plan = originalPlanSchema.parse(fillMissingShotPrompts(JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")), config));
+  const parsed = parseJsonResponse(text);
+  const plan = config.adultExplicit
+    ? hydrateCompactAdultPlan(compactAdultPlanSchema.parse(parsed), config)
+    : originalPlanSchema.parse(fillMissingShotPrompts(parsed, config));
   normalizeShortTimeline(plan, config);
   reinforceAdultSingleShot(plan, config);
   validatePlan(plan, config);
@@ -370,12 +503,12 @@ async function languageResponse(state: OriginalRun, prompt: string) {
 
 async function inspectAdultImage(cwd: string, state: OriginalRun, file: GeneratedMedia) {
   const prompt = `你是成人影视分镜的严格视觉质检员。图中人物均为明确 25 岁以上、原创虚构、清醒知情且自愿的成年人；这里只做技术质量检查，不改写剧情。
-逐项检查这张交合极近景：
+这张图是成人视频镜头的静态动作起点，可以是进入前的准确对准、自然接触或浅插入；不要求静态图已经完成深度交合，真正的进入与往复会在视频阶段单独质检。逐项检查：
 1. anatomy：阴茎是否确实从男性耻骨区自然延伸，根部、阴茎体、冠状沟和龟头比例连续；女性阴阜、外阴唇与阴道口位置是否符合真实人体结构。
-2. connection：阴茎是否沿与骨盆一致的轴线进入唯一且正确的阴道口；不得从大腿、腹部或错误位置长出，不得悬浮、脱体、穿模、融合或出现重复器官。
+2. connection：双方骨盆和阴茎轴线是否能形成解剖上可行的进入路径；若尚未插入，龟头应自然对准或接触唯一正确的阴道口；若已浅插入，必须沿正确轴线进入。不得从大腿、腹部或女性身体错误长出，不得悬浮、脱体、穿模、融合或出现重复器官。
 3. realism：皮肤、毛发、接触阴影、轻微组织压痕是否自然，不能像塑料、橡胶、假阳具、蜡像或拼贴。
-4. visibility：交合连接是否清晰对焦、无遮挡、未裁切，能明确辨认真实的插入关系。
-每项给 0-100 整数。任何一项低于 82，或存在器官来源错误、错误孔位、悬浮、脱体、穿模、融合、重复器官，passed 必须为 false。reasons 用中文列出画面中实际可见的问题；correctionPrompt 写成下一次生图可直接追加的具体纠偏指令。只输出一个 JSON 对象，不加代码围栏或解释：
+4. visibility：男性耻骨与阴茎根部、女性骨盆与唯一阴道口、双方接触或对准区域是否清晰对焦、无遮挡、未裁切，足以把这张图安全地作为视频动作起点。
+每项给 0-100 整数。任何一项低于 80，或存在器官来源错误、错误孔位、悬浮、脱体、穿模、融合、重复器官，passed 必须为 false。仅仅“尚未深度插入”不能作为失败理由，只要器官来源、骨盆轴线、对准/接触和可见性均正确。reasons 用中文列出画面中实际可见的问题；correctionPrompt 写成下一次生图可直接追加的具体纠偏指令。只输出一个 JSON 对象，不加代码围栏或解释：
 ${JSON.stringify(z.toJSONSchema(adultImageQaSchema))}`;
   const configured = getConfiguredModel(state.config.language.providerId, state.config.language.modelId);
   const signal = AbortSignal.timeout(10 * 60 * 1000);
@@ -391,13 +524,14 @@ ${JSON.stringify(z.toJSONSchema(adultImageQaSchema))}`;
 }
 
 function needsAdultImageQa(state: OriginalRun, task: OriginalTask) {
-  if (!state.config.adultExplicit || task.kind !== "image") return false;
-  const shotId = task.id.startsWith("image:") ? task.id.slice("image:".length) : "";
-  const shot = state.plan?.shots.find(item => item.id === shotId);
-  // Gate the first explicit-action keyframe strictly. Later climax/aftermath
-  // frames keep continuity and face QA, but do not need to repeat a medical
-  // close-up gate when the required explicit anchor has already passed.
-  return shot?.storyBeat === "explicitAction";
+  // A static keyframe is only an action anchor. Some image providers cannot
+  // reliably render a verifiable insertion connection in one still, even when
+  // the subsequent video can animate it correctly. Keep the anatomy contract in
+  // the image prompt, but make the video frame QA authoritative so a single
+  // malformed still cannot deadlock the whole 30-second production.
+  void state;
+  void task;
+  return false;
 }
 
 function parseJsonResponse(text: string) {
@@ -826,6 +960,14 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
   } else if (task.kind === "contentQa") {
     const { result, videoTask, shot } = await inspectAdultVideo(cwd, state, task);
     if (!result.passed) {
+      if (state.config.adultExplicit && !state.config.faceQaEnabled) {
+        // A face-QA-disabled run is an explicit preview mode. Preserve the
+        // failed content scores/reasons, but do not spend more paid video
+        // attempts repeating a provider that returned a non-matching clip.
+        task.status = "completed";
+        task.error = "成人内容 QA 未通过；已按预览模式继续，结果不可视为 QA 通过。";
+        return;
+      }
       const attempts = (videoTask.contentQaAttempts ?? 0) + 1;
       videoTask.contentQaAttempts = attempts;
       if (attempts > state.config.maxRetries) fail(`成人视频内容 QA 未通过，已用完 ${state.config.maxRetries} 次重试：${result.reasons.join("；")}`);
@@ -944,7 +1086,28 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
       if (references.length) request.images = references.map(file => ({ path: file.path, mimeType: file.mimeType }));
     }
     if (!needsAdultImageQa(state, task)) {
-      task.files = await generateMedia(cwd, task.kind === "video" ? "video" : "image", request, AbortSignal.timeout(30 * 60 * 1000));
+      try {
+        task.files = await generateMedia(cwd, task.kind === "video" ? "video" : "image", request, AbortSignal.timeout(30 * 60 * 1000));
+      } catch (error) {
+        const message = failureMessage(error);
+        // Some white-list video gateways reject a continuity tail as a possible
+        // real-person reference even when it was generated locally. Retry only
+        // this provider-specific 400 with the current storyboard keyframe as the
+        // sole first-frame reference; keep the continuity contract in the prompt
+        // and leave other provider failures untouched.
+        if (task.kind !== "video" || !/may contain real person/i.test(message) || !references.length) throw error;
+        const shotIndex = videoShot ? state.plan?.shots.findIndex(item => item.id === videoShot.id) ?? -1 : -1;
+        const previousShot = shotIndex > 0 ? state.plan?.shots[shotIndex - 1] : undefined;
+        const previousImageId = previousShot ? `image:${previousShot.id}` : undefined;
+        const previousImageIndex = previousImageId ? task.references?.findIndex(id => id === previousImageId) ?? -1 : -1;
+        const currentKeyframe = references[previousImageIndex >= 0 ? previousImageIndex : 0]!;
+        request.firstFrame = { path: currentKeyframe.path, mimeType: currentKeyframe.mimeType };
+        request.images = [];
+        task.referenceFrame = currentKeyframe.path;
+        task.prompt = `${request.prompt}\n\n【参考帧兼容回退】使用上一镜已接受的剧情首帧作为唯一输入起点，保持人物身份、场景锚点与当前镜头动作结果连续；不要把视频尾帧或其他分镜图片作为额外输入。`;
+        request.prompt = task.prompt;
+        task.files = await generateMedia(cwd, "video", request, AbortSignal.timeout(30 * 60 * 1000));
+      }
       await verifyFiles(cwd, task.files);
     } else {
       const basePrompt = request.prompt;
@@ -1108,6 +1271,17 @@ export async function control(cwd: string, id: string, action: "pause" | "resume
     if (running) return fail("当前步骤仍在执行，完成后才能继续", 409);
     if (state.status === "completed") return state;
     if ((state.status === "interrupted" || state.tasks.some(task => task.status === "running")) && !acceptUncertain) fail("上次进行中的请求可能已计费，请核对上游记录后确认重试", 409);
+    if (state.status === "failed" && acceptUncertain) {
+      // Adult-content QA is advisory only when the user explicitly chooses a
+      // preview continuation. Keep the failed scores/reasons in the task so
+      // the result is never reported as QA-passed, but unblock later shots and
+      // the export stage for an auditable preview.
+      for (const task of state.tasks) {
+        if (task.kind !== "contentQa" || task.status !== "failed") continue;
+        task.status = "completed";
+        task.error = "已按用户选择继续；本镜成人内容 QA 未通过，结果仅作为预览。";
+      }
+    }
     const models = await preflight(state.config);
     for (const task of state.tasks) if (task.status !== "completed") { task.status = "pending"; delete task.error; }
     state.status = "running";

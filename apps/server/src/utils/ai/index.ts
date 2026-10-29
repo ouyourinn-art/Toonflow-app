@@ -205,6 +205,10 @@ export function streamAi(
     signal,
     // 此入口没有 AgentSession，仅重试尚未交付响应的请求，已输出的流不能直接拼接重放。
     maxRetries: 3,
+    // 成人剧本与严格 JSON Schema 可能需要更长的上游生成时间。
+    // 网关在 524/429 后会明确要求 120s Retry-After；0 表示尊重服务端给出的等待时间，
+    // 而不是超过 SDK 默认 60s 上限就立即将整个任务判定为失败。
+    maxRetryDelayMs: 0,
     fetch: files.fetch,
     onPayload: async (payload) => {
       let body = payload as Record<string, unknown>;

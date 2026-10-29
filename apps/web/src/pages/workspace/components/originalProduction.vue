@@ -395,6 +395,12 @@ async function resumeProduction() {
       acceptUncertain = true;
     } catch { return; }
   }
+  if (run.value?.tasks.some(task => task.kind === "contentQa" && task.status === "failed")) {
+    try {
+      await ElMessageBox.confirm("成人内容质检未通过。继续只会生成可供检查的预览，失败原因和分数会保留，不能视为质检通过。是否继续后续镜头与合成？", "带 QA 警告继续", { type: "warning", confirmButtonText: "继续生成预览", cancelButtonText: "停止" });
+      acceptUncertain = true;
+    } catch { return; }
+  }
   if (!lifetime.signal.aborted) await controlProduction("resume", acceptUncertain);
 }
 
