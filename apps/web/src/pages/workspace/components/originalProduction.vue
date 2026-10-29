@@ -78,24 +78,30 @@
           <el-button text :loading="loadingModels" @click="loadModels">刷新模型列表</el-button>
           <el-button text @click="openSettings">配置模型</el-button>
         </div>
-        <p v-if="modelError || validationError" class="errorText" role="alert">{{ modelError || validationError }}</p>
+        <p v-if="planningValidationError || (!planningOnlyReady && (modelError || validationError))" class="errorText" role="alert">{{ planningValidationError || modelError || validationError }}</p>
         <p class="costNotice">预计 {{ form.shotCount * form.duration }} 秒{{ form.stitch ? '，合成后按目标时长精确裁切' : '' }}；图片至少 {{ form.characterCount + form.sceneCount + form.shotCount }} 张；视频首轮 {{ form.shotCount }} 段；图片并发 {{ form.imageConcurrency }}，视频并发 {{ form.videoConcurrency }}。<template v-if="form.productionMode === 'long'">首轮估算 {{ firstPassCost }} USD，全部重试上限估算 {{ retryCost }} USD，实际提交受 {{ form.costLimit || '不限' }} USD 预算约束。</template> 生成按供应商实际规则计费。</p>
         <div class="actions">
           <el-button v-if="newVersion" :disabled="busy" @click="newVersion = false">返回当前进度</el-button>
-          <el-button type="primary" size="large" :loading="busy" :disabled="!canStart" @click="startProduction">{{ run ? '新建一版并开始制作' : '开始一键制作' }}</el-button>
+          <el-button size="large" :loading="busy" :disabled="!canStartPlanning" @click="startProduction(true)">只生成剧本与分镜 JSON</el-button>
+          <el-button type="primary" size="large" :loading="busy" :disabled="!canStart" @click="startProduction(false)">{{ run ? '新建一版并开始制作' : '开始一键制作' }}</el-button>
         </div>
       </template>
       <template v-else-if="run">
         <div class="progressHeading"><strong>{{ run.plan?.title || (run.config.productionMode === 'long' ? '正在构建全片圣经与分场剧本' : '正在编写完整剧本') }}</strong><span>{{ statusLabels[run.status] }} · {{ completedCount }}/{{ run.tasks.length }} 步</span></div>
         <el-progress :percentage="progress" :status="run.status === 'completed' ? 'success' : run.status === 'failed' ? 'exception' : undefined" />
-        <p class="runSummary">{{ run.config.productionMode === 'long' ? `${run.config.targetDurationMinutes} 分钟长片 · ${run.config.sceneCount} 场` : '短片' }} · {{ run.config.characterCount }} 个角色 · {{ run.config.shotCount }} 个镜头 · {{ run.config.ratio }} · 每镜 {{ run.config.duration }} 秒 · {{ run.config.characterLock ? '人物锁定' : '普通身份一致' }} · {{ run.config.continuousShots ? '同场尾帧连续' : '身份分镜首帧' }} · 图片并发 {{ run.config.imageConcurrency }} / 视频并发 {{ run.config.videoConcurrency }} · {{ run.config.adultExplicit ? '露骨成人' : '常规内容' }} · 语言模型 {{ run.config.language.modelId }}<template v-if="run.config.productionMode === 'long'"> · 视频估算已用 {{ run.estimatedCost || 0 }} / {{ run.config.costLimit || '不限' }} USD</template></p>
+        <p class="runSummary">{{ run.config.planningOnly ? '仅剧本与分镜 JSON' : (run.config.productionMode === 'long' ? `${run.config.targetDurationMinutes} 分钟长片 · ${run.config.sceneCount} 场` : '短片') }} · {{ run.config.characterCount }} 个角色 · {{ run.config.shotCount }} 个镜头 · {{ run.config.ratio }} · 每镜 {{ run.config.duration }} 秒 · {{ run.config.characterLock ? '人物锁定' : '普通身份一致' }} · {{ run.config.continuousShots ? '同场尾帧连续' : '身份分镜首帧' }} · 图片并发 {{ run.config.imageConcurrency }} / 视频并发 {{ run.config.videoConcurrency }} · {{ run.config.adultExplicit ? '露骨成人' : '常规内容' }} · 语言模型 {{ run.config.language.modelId }}<template v-if="run.config.productionMode === 'long' && !run.config.planningOnly"> · 视频估算已用 {{ run.estimatedCost || 0 }} / {{ run.config.costLimit || '不限' }} USD</template></p>
         <p v-if="run.status === 'pausing'" class="runSummary">当前请求完成并保存后暂停。</p>
         <div v-if="run.error" class="errorBox" role="alert">{{ run.error }}</div>
         <div class="actions">
           <el-button v-if="run.status === 'running'" :loading="busy" @click="controlProduction('pause')">完成当前步骤后暂停</el-button>
           <el-button v-if="canResume" type="primary" :loading="busy" :disabled="!statusReady" @click="resumeProduction">继续未完成步骤</el-button>
+          <el-button v-if="run.status === 'completed' && run.config.planningOnly" type="primary" :loading="busy" @click="prepareMediaContinuation">审核 JSON 后生成资产与视频</el-button>
           <el-button v-if="!running" :disabled="busy || !statusReady" @click="prepareNewVersion">新建一版</el-button>
           <el-button v-if="run.canvases.export" type="success" :disabled="!ready" @click="openCanvas(run.canvases.export)">查看成片</el-button>
+        </div>
+        <div v-if="run.jsonFiles?.length" class="jsonOutputs">
+          <span>结构化 JSON 已保存：</span>
+          <el-button v-for="file in run.jsonFiles" :key="file" text size="small" :disabled="busy" @click="downloadJson(file)">{{ file.split('/').at(-1) }}</el-button>
         </div>
         <p class="runSummary">已完成素材会复用。失败后手动继续；上次结果不明的请求，需核对上游记录再重试。</p>
         <div class="taskList" aria-label="制作步骤">
@@ -124,6 +130,8 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import type { MediaModel } from "@toonflow/tools-scaffold/runtime";
 import type { OriginalConfig, OriginalRun } from "@toonflow/server/original";
 import { modelChoices } from "@/stores/settings";
+import saveFile from "@/lib/saveFile";
+import useWorkspaceFiles from "@/lib/workspaceFiles";
 
 const props = defineProps<{ directory: string; brief: string; ready: boolean; activate: (file: string) => Promise<void> }>();
 const emit = defineEmits<{ update: [value: OriginalRun | null]; openSettings: [] }>();
@@ -145,7 +153,7 @@ const form = reactive<ProductionForm>({
   productionMode: "short", brief: props.brief, style: "电影写实", characterCount: 3, shotCount: 6,
   targetDurationMinutes: 10, sceneCount: 1, maxRetries: 0, costLimit: 0, costPerVideo: 2.01,
   faceQaEnabled: false, faceThreshold: 0.363, ratio: "9:16", duration: 15, resolution: "", stitch: true,
-  adultExplicit: false, characterLock: true, continuousShots: false, imageConcurrency: 6, videoConcurrency: 4,
+  adultExplicit: false, characterLock: true, continuousShots: false, planningOnly: false, imageConcurrency: 6, videoConcurrency: 4,
 });
 const statusLabels = { running: "进行中", pausing: "等待暂停", paused: "已暂停", failed: "执行失败", completed: "已完成", interrupted: "服务中断，待恢复" };
 const taskLabels = { pending: "待执行", running: "进行中", completed: "已完成", failed: "失败" };
@@ -184,6 +192,20 @@ const validationError = computed(() => {
   return "";
 });
 const canStart = computed(() => props.ready && statusReady.value && !busy.value && !running.value && !loadingModels.value && !modelError.value && !validationError.value);
+const planningValidationError = computed(() => {
+  if (!modelChoices.value.some(model => model.value === languageValue.value)) return "请先配置并选择剧本模型，使用上游真实模型 ID。";
+  if (!form.brief.trim()) return "请填写创作需求。";
+  if (!Number.isInteger(form.characterCount) || form.characterCount < 1 || form.characterCount > 20 || !Number.isInteger(form.shotCount) || form.shotCount < 1 || form.shotCount > (form.productionMode === "long" ? 240 : 60)) return "角色数和镜头数须在允许范围内。";
+  if (form.productionMode === "long") {
+    if (form.shotCount * form.duration !== form.targetDurationMinutes * 60) return "长片镜头数必须精确覆盖目标片长。";
+    if (!Number.isInteger(form.sceneCount) || form.sceneCount < 1 || form.sceneCount > form.shotCount) return "长片场景数须小于或等于镜头数。";
+    if (Math.ceil(form.shotCount / form.sceneCount) > 12) return "每场最多 12 镜，请增加长片场景数。";
+  }
+  return "";
+});
+const planningOnlyReady = computed(() => !selectedImage.value || !selectedVideo.value);
+const canStartPlanning = computed(() => props.ready && statusReady.value && !busy.value && !running.value && !planningValidationError.value);
+const workspaceFiles = useWorkspaceFiles(props.directory);
 
 function errorMessage(error: unknown) {
   return axios.isAxiosError(error) ? error.response?.data?.message || error.message : error instanceof Error ? error.message : "操作失败，请重试";
@@ -194,8 +216,8 @@ function applyRun(value: OriginalRun | null) {
   if (value && value.id !== run.value?.id && !newVersion.value) {
     Object.assign(form, value.config);
     languageValue.value = JSON.stringify([value.config.language.providerId, value.config.language.modelId]);
-    imageValue.value = JSON.stringify([value.config.image.providerId, value.config.image.modelId]);
-    videoValue.value = JSON.stringify([value.config.video.providerId, value.config.video.modelId]);
+    imageValue.value = value.config.image ? JSON.stringify([value.config.image.providerId, value.config.image.modelId]) : "";
+    videoValue.value = value.config.video ? JSON.stringify([value.config.video.providerId, value.config.video.modelId]) : "";
   }
   run.value = value;
   emit("update", value);
@@ -278,12 +300,18 @@ function applyAdultLongPreset() {
   selectAdultModels();
 }
 
-async function startProduction() {
-  if (!canStart.value) return;
+async function startProduction(planningOnly = false) {
+  if (planningOnly ? !canStartPlanning.value : !canStart.value) return;
   busy.value = true;
   actionError.value = "";
   try {
-    const config: OriginalConfig = { ...form, language: selection(languageValue.value), image: selection(imageValue.value), video: selection(videoValue.value) };
+    const config: OriginalConfig = {
+      ...form,
+      planningOnly,
+      language: selection(languageValue.value),
+      image: imageValue.value ? selection(imageValue.value) : undefined,
+      video: videoValue.value ? selection(videoValue.value) : undefined,
+    };
     const { data } = await axios.post<{ code: number; data: OriginalRun; message: string }>("/api/original/start", { directory: props.directory, runId: crypto.randomUUID(), previousRunId: run.value?.id, config }, { headers, signal: lifetime.signal });
     if (data.code !== 200) throw new Error(data.message);
     if (!lifetime.signal.aborted) { newVersion.value = false; applyRun(data.data); }
@@ -318,11 +346,32 @@ function prepareNewVersion() {
   if (!run.value) return;
   Object.assign(form, run.value.config);
   languageValue.value = JSON.stringify([run.value.config.language.providerId, run.value.config.language.modelId]);
-  imageValue.value = JSON.stringify([run.value.config.image.providerId, run.value.config.image.modelId]);
-  videoValue.value = JSON.stringify([run.value.config.video.providerId, run.value.config.video.modelId]);
+  imageValue.value = run.value.config.image ? JSON.stringify([run.value.config.image.providerId, run.value.config.image.modelId]) : "";
+  videoValue.value = run.value.config.video ? JSON.stringify([run.value.config.video.providerId, run.value.config.video.modelId]) : "";
   newVersion.value = true;
   actionError.value = "";
   void loadModels();
+}
+
+function prepareMediaContinuation() {
+  if (!run.value?.plan || !run.value.config.planningOnly) return;
+  Object.assign(form, run.value.config, { planningOnly: false });
+  languageValue.value = JSON.stringify([run.value.config.language.providerId, run.value.config.language.modelId]);
+  imageValue.value = run.value.config.image ? JSON.stringify([run.value.config.image.providerId, run.value.config.image.modelId]) : "";
+  videoValue.value = run.value.config.video ? JSON.stringify([run.value.config.video.providerId, run.value.config.video.modelId]) : "";
+  newVersion.value = true;
+  actionError.value = "";
+  void loadModels();
+}
+
+async function downloadJson(path: string) {
+  try {
+    const content = await workspaceFiles.read(path);
+    const fileName = path.split(/[\\/]/).at(-1) || "plan.json";
+    if (await saveFile(new Blob([content], { type: "application/json" }), fileName)) ElMessage.success(`已准备下载：${fileName}`);
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  }
 }
 
 async function openCanvas(file: string) {

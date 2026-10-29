@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const modelSelection = z.strictObject({ providerId: z.string().min(1).max(96), modelId: z.string().min(1).max(256) });
 export const originalConfigSchema = z.strictObject({
-  language: modelSelection, image: modelSelection, video: modelSelection,
+  language: modelSelection, image: modelSelection.optional(), video: modelSelection.optional(),
   productionMode: z.enum(["short", "long"]).default("short"),
   brief: z.string().trim().min(1).max(50000),
   style: z.string().trim().max(1000),
@@ -22,6 +22,7 @@ export const originalConfigSchema = z.strictObject({
   adultExplicit: z.boolean().default(false),
   characterLock: z.boolean().default(true),
   continuousShots: z.boolean().default(false),
+  planningOnly: z.boolean().default(false),
   imageConcurrency: z.number().int().min(1).max(12).default(6),
   videoConcurrency: z.number().int().min(1).max(8).default(4),
 });
@@ -74,7 +75,7 @@ export const originalRunSchema = z.strictObject({
   createdAt: z.number(), updatedAt: z.number(),
   plan: originalPlanSchema.optional(), tasks: z.array(taskSchema).max(1000),
   longBible: z.unknown().optional(), scenePlans: z.record(identifier, z.unknown()).optional(),
-  canvases: z.record(z.string(), z.string()), error: z.string().optional(),
+  canvases: z.record(z.string(), z.string()), jsonFiles: z.array(z.string().min(1).max(2048)).max(20).optional(), error: z.string().optional(),
   usage: z.object({ input: z.number(), output: z.number(), totalTokens: z.number() }).optional(),
   estimatedCost: z.number().finite().nonnegative().optional(),
 });

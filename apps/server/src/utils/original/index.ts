@@ -78,12 +78,14 @@ async function preflight(config: OriginalConfig) {
     if (config.shotCount * config.duration !== config.targetDurationMinutes * 60) fail("长片镜头数与目标分钟数不一致");
     if (config.sceneCount > config.shotCount) fail("长片场景数不能超过镜头数");
     if (Math.ceil(config.shotCount / config.sceneCount) > 12) fail("每场最多 12 镜，请增加长片场景数");
-    if (config.costLimit > 0 && config.shotCount * config.costPerVideo > config.costLimit) fail(`预算上限不足：首轮视频预计 ${Number((config.shotCount * config.costPerVideo).toFixed(2))} USD`);
   }
+  if (config.planningOnly) return { image: undefined, video: undefined };
+  if (config.productionMode === "long" && config.costLimit > 0 && config.shotCount * config.costPerVideo > config.costLimit) fail(`预算上限不足：首轮视频预计 ${Number((config.shotCount * config.costPerVideo).toFixed(2))} USD`);
   if (config.faceQaEnabled) await prepareFaceQa();
   const models = await listMediaModels();
-  const image = models.find(model => model.type === "image" && model.providerId === config.image.providerId && model.modelId === config.image.modelId);
-  const video = models.find(model => model.type === "video" && model.providerId === config.video.providerId && model.modelId === config.video.modelId);
+  if (!config.image || !config.video) return fail("完整制作需要同时配置图片和视频模型；只生成 JSON 可不配置媒体模型");
+  const image = models.find(model => model.type === "image" && model.providerId === config.image!.providerId && model.modelId === config.image!.modelId);
+  const video = models.find(model => model.type === "video" && model.providerId === config.video!.providerId && model.modelId === config.video!.modelId);
   if (!image || !video) return fail("图片或视频模型已不存在，请重新选择");
   if (!Array.isArray(image.mode) || !image.mode.includes("text") || !image.mode.includes("multiReference")) fail("人物资产与分镜图需要文生图和多参考图能力，请选择同时支持 text、multiReference 的图片模型");
   if (image.imageRatios?.length && !image.imageRatios.includes(config.ratio)) fail("图片模型不支持所选画幅");
@@ -160,6 +162,33 @@ function validatePlan(plan: OriginalPlan, config: OriginalConfig) {
   if (plan.assets.some(asset => !used.has(asset.id))) fail("资产表包含未在任何镜头出场的人物或场景，已在生图前停止");
 }
 
+function buildShortMediaTasks(plan: OriginalPlan, config: OriginalConfig): OriginalTask[] {
+  const tasks: OriginalTask[] = plan.assets.map(asset => ({
+    id: `asset:${asset.id}`, kind: "asset", label: `${asset.kind === "character" ? "角色" : "场景"}：${asset.name}`, status: "pending",
+    sceneId: asset.kind === "scene" ? asset.id : undefined, prompt: buildAssetPrompt(asset, config),
+  }));
+  const previousShot = (shot: OriginalPlan["shots"][number]) => {
+    const index = plan.shots.indexOf(shot);
+    return config.continuousShots ? plan.shots.slice(0, index).findLast(item => item.sceneId === shot.sceneId) : undefined;
+  };
+  tasks.push(...plan.shots.map<OriginalTask>(shot => {
+    const previous = previousShot(shot);
+    const references = [...shot.characterIds.map(id => `asset:${id}`), previous ? `image:${previous.id}` : `asset:${shot.sceneId}`];
+    return { id: `image:${shot.id}`, kind: "image", label: `分镜图：${shot.title}`, status: "pending", sceneId: shot.sceneId, prompt: buildImagePrompt(plan, shot, config, references), references };
+  }));
+  tasks.push(...plan.shots.map<OriginalTask>(shot => ({ id: `video:${shot.id}`, kind: "video", label: `镜头视频：${shot.title}`, status: "pending", sceneId: shot.sceneId, attempts: 0, prompt: buildVideoPrompt(plan, shot, config), references: [`image:${shot.id}`] })));
+  if (config.faceQaEnabled) tasks.push(...plan.shots.filter(shot => shot.characterIds.length && faceQaApplicable(shot)).map<OriginalTask>(shot => ({
+    id: `qa:${shot.id}`, kind: "qa", label: `人物一致性质检：${shot.title}`, status: "pending", sceneId: shot.sceneId,
+    references: [`video:${shot.id}`, ...shot.characterIds.map(id => `asset:${id}`)],
+  })));
+  if (config.stitch) tasks.push({ id: "export", kind: "export", label: "合成完整视频", status: "pending" });
+  return tasks;
+}
+
+function buildMediaTasks(plan: OriginalPlan, config: OriginalConfig) {
+  return config.productionMode === "long" ? buildLongMediaTasks(plan, config) : buildShortMediaTasks(plan, config);
+}
+
 async function planStory(cwd: string, state: OriginalRun) {
   const config = state.config;
   const identity = config.characterLock
@@ -189,22 +218,10 @@ async function planStory(cwd: string, state: OriginalRun) {
   }
   validatePlan(plan, config);
   await write(cwd, `${runDirectory(state)}/plan.json`, JSON.stringify(plan, null, 2));
+  state.jsonFiles = [`${runDirectory(state)}/plan.json`];
   state.plan = plan;
-  const previousShot = (shot: OriginalPlan["shots"][number]) => {
-    const index = plan.shots.indexOf(shot);
-    return config.continuousShots ? plan.shots.slice(0, index).findLast(item => item.sceneId === shot.sceneId) : undefined;
-  };
-  state.tasks.splice(1, state.tasks.length - 1,
-    ...plan.assets.map<OriginalTask>(asset => ({ id: `asset:${asset.id}`, kind: "asset", label: `${asset.kind === "character" ? "角色" : "场景"}：${asset.name}`, status: "pending", sceneId: asset.kind === "scene" ? asset.id : undefined, prompt: buildAssetPrompt(asset, config) })),
-    ...plan.shots.map<OriginalTask>(shot => {
-      const previous = previousShot(shot);
-      const references = [...shot.characterIds.map(id => `asset:${id}`), previous ? `image:${previous.id}` : `asset:${shot.sceneId}`];
-      return { id: `image:${shot.id}`, kind: "image", label: `分镜图：${shot.title}`, status: "pending", sceneId: shot.sceneId, prompt: buildImagePrompt(plan, shot, config, references), references };
-    }),
-    ...plan.shots.map<OriginalTask>(shot => ({ id: `video:${shot.id}`, kind: "video", label: `镜头视频：${shot.title}`, status: "pending", sceneId: shot.sceneId, attempts: 0, prompt: buildVideoPrompt(plan, shot, config), references: [`image:${shot.id}`] })),
-    ...(config.faceQaEnabled ? plan.shots.filter(shot => shot.characterIds.length && faceQaApplicable(shot)).map<OriginalTask>(shot => ({ id: `qa:${shot.id}`, kind: "qa", label: `人物一致性质检：${shot.title}`, status: "pending", sceneId: shot.sceneId, references: [`video:${shot.id}`, ...shot.characterIds.map(id => `asset:${id}`)] })) : []),
-    ...(config.stitch ? [{ id: "export", kind: "export" as const, label: "合成完整视频", status: "pending" as const }] : []),
-  );
+  if (config.planningOnly) return;
+  state.tasks.splice(1, state.tasks.length - 1, ...buildShortMediaTasks(plan, config));
 }
 
 async function languageResponse(state: OriginalRun, prompt: string) {
@@ -233,6 +250,7 @@ async function planLongBible(cwd: string, state: OriginalRun, task: OriginalTask
   state.longBible = bible;
   state.scenePlans = {};
   await write(cwd, `${runDirectory(state)}/longBible.json`, JSON.stringify(bible, null, 2));
+  state.jsonFiles = [`${runDirectory(state)}/longBible.json`];
   state.tasks.splice(1, state.tasks.length - 1, ...bible.scenes.map<OriginalTask>(scene => ({
     id: `scenePlan:${scene.id}`, kind: "scenePlan", label: `展开分场：${scene.title}`, status: "pending", sceneId: scene.id,
   })));
@@ -271,12 +289,18 @@ async function planLongScene(cwd: string, state: OriginalRun, task: OriginalTask
   scenePlans[scene.id] = plan;
   state.scenePlans = scenePlans;
   await write(cwd, `${runDirectory(state)}/scenes/${scene.id}.json`, JSON.stringify(plan, null, 2));
+  state.jsonFiles = [...new Set([...(state.jsonFiles ?? []), `${runDirectory(state)}/scenes/${scene.id}.json`])];
   if (Object.keys(scenePlans).length !== bible.scenes.length) return;
   const complete = composeLongPlan(bible, scenePlans);
   validatePlan(complete, state.config);
   state.plan = complete;
   await write(cwd, `${runDirectory(state)}/plan.json`, JSON.stringify(complete, null, 2));
+  state.jsonFiles = [...new Set([...(state.jsonFiles ?? []), `${runDirectory(state)}/plan.json`])];
   const planningTasks = 1 + bible.scenes.length;
+  if (state.config.planningOnly) {
+    state.tasks.splice(planningTasks, state.tasks.length - planningTasks);
+    return;
+  }
   state.tasks.splice(planningTasks, state.tasks.length - planningTasks, ...buildLongMediaTasks(complete, state.config));
 }
 
@@ -451,12 +475,14 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
     const config = state.config;
     const model = task.kind === "video" ? models.video : models.image;
     const selection = task.kind === "video" ? config.video : config.image;
+    const mediaModel = model ?? fail("媒体任务缺少已配置的图片或视频模型");
+    const mediaSelection = selection ?? fail("媒体任务缺少已配置的图片或视频模型");
     const references = (task.references ?? []).map(id => state.tasks.find(item => item.id === id && item.status === "completed")?.files?.[0] ?? fail(`参考资产尚未完成：${id}`));
     await verifyFiles(cwd, references);
     const request: MediaGenerationRequest = {
-      ...selection, prompt: task.prompt!, ratio: config.ratio,
+      ...mediaSelection, prompt: task.prompt!, ratio: config.ratio,
       outputDirectory: `${runDirectory(state)}/${task.kind}`,
-      other: Object.fromEntries((model.rules ?? []).map(rule => [rule.field, rule.value])),
+      other: Object.fromEntries((mediaModel.rules ?? []).map(rule => [rule.field, rule.value])),
     };
     if (task.kind === "video") {
       if (config.productionMode === "long") {
@@ -468,7 +494,7 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
       await save(cwd, control);
       request.duration = config.duration;
       request.resolution = config.resolution;
-      request.mode = videoMode(model);
+      request.mode = videoMode(mediaModel);
       let referenceMedia = references[0];
       if (config.continuousShots) {
         const previousTask = previousVideoTask(state, task);
@@ -484,9 +510,9 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
         else request.firstFrame = reference;
       } else delete task.referenceFrame;
       await save(cwd, control);
-      if (model.audio === "optional") request.generateAudio = true;
+      if (mediaModel.audio === "optional") request.generateAudio = true;
     } else {
-      request.size = model.imageSizes?.[0];
+      request.size = mediaModel.imageSizes?.[0];
       if (references.length) request.images = references.map(file => ({ path: file.path, mimeType: file.mimeType }));
     }
     task.files = await generateMedia(cwd, task.kind === "video" ? "video" : "image", request, AbortSignal.timeout(30 * 60 * 1000));
@@ -570,11 +596,18 @@ export async function start(cwd: string, id: string, config: OriginalConfig, pre
     if (previous && previous.id !== previousRunId) fail("项目已有制作记录，请刷新后选择继续或新建一版", 409);
     const project = await readJson(cwd, "originalProject.json");
     if (project?.yaohaoOriginal !== true || project.version !== 1 || !["original", "adaptation"].includes(project.mode)) fail("当前工作区不是受支持的原创项目");
+    const reusePlan = previous?.status === "completed" && previous.config.planningOnly && !config.planningOnly && previous.plan;
+    if (reusePlan && config.productionMode !== previous.config.productionMode) fail("继续媒体制作时不能切换短片或长片模式，请新建一版重新规划");
     const models = await preflight(config);
     const initialTask: OriginalTask = config.productionMode === "long"
       ? { id: "bible", kind: "bible", label: "全片圣经、唯一角色库与分场规划", status: "pending" }
       : { id: "plan", kind: "plan", label: "完整剧本、唯一角色表与导演分镜", status: "pending" };
-    const state: OriginalRun = { version: 1, id, status: "running", config, createdAt: Date.now(), updatedAt: Date.now(), tasks: [initialTask], canvases: {}, ...(config.productionMode === "long" ? { scenePlans: {}, estimatedCost: 0 } : {}) };
+    const state: OriginalRun = {
+      version: 1, id, status: "running", config, createdAt: Date.now(), updatedAt: Date.now(),
+      tasks: reusePlan ? buildMediaTasks(reusePlan, config) : [initialTask], canvases: {},
+      ...(reusePlan ? { plan: reusePlan, jsonFiles: [`originalRuns/${id}/plan.json`] } : {}),
+      ...(config.productionMode === "long" ? { scenePlans: reusePlan ? previous?.scenePlans : {}, longBible: reusePlan ? previous?.longBible : undefined, estimatedCost: 0 } : {}),
+    };
     const control: Control = { state, pause: false, saving: Promise.resolve() };
     await mkdir((await resolveWorkspacePath(cwd, "originalRuns", true)).path, { recursive: true });
     try { await mkdir((await resolveWorkspacePath(cwd, runDirectory(state), true)).path); }
@@ -582,6 +615,7 @@ export async function start(cwd: string, id: string, config: OriginalConfig, pre
       if ((error as NodeJS.ErrnoException).code === "EEXIST") fail("该制作版本目录已存在，请使用新的版本 ID", 409);
       throw error;
     }
+    if (reusePlan) await write(cwd, `${runDirectory(state)}/plan.json`, JSON.stringify(reusePlan, null, 2));
     await save(cwd, control);
     active.set(directoryKey, control);
     void execute(cwd, control, models);
