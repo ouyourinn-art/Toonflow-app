@@ -57,10 +57,13 @@
               <button v-for="mode in originalModes" :key="mode.id" class="modeCard" :class="{ selected: creationMode === mode.id }" type="button" :aria-pressed="creationMode === mode.id" @click="creationMode = mode.id">
                 <strong>{{ mode.label }}</strong><span>{{ mode.description }}</span>
               </button>
-              <button class="modeCard workflowCard" type="button" @click="launchOneClickWorkflow">
-                <strong>一键制作成片</strong><span>完整剧本 → 人物与场景资产 → 分镜图 → 视频 → 合成成片。</span>
-              </button>
-              <button class="modeCard" type="button" @click="scrollToSection('projects')"><strong>继续项目</strong><span>打开已保存的剧本、画布和素材。</span></button>
+            </div>
+            <div class="workflowLauncher">
+              <div class="workflowCopy">
+                <strong>一键制作成片</strong>
+                <span>填写一次创作需求，按完整剧本 → 人物与场景资产 → 分镜图 → 视频 → 合成成片的顺序执行。</span>
+              </div>
+              <el-button class="workflowAction" type="primary" @click="launchOneClickWorkflow">进入一键工作流</el-button>
             </div>
             <div class="promptArea">
               <el-card class="promptCard" :class="{ draggingAttachments }" shadow="never" @dragenter.capture="dragEnterAttachments" @dragover.capture="dragOverAttachments" @dragleave.capture="dragLeaveAttachments" @drop.capture="dropAttachments">
@@ -500,7 +503,7 @@ async function createProject(fromPrompt = true) {
   .studioSubtitle { text-align: center; color: var(--el-text-color-secondary); margin: -8px 0 24px; }
   .creationModes {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
     width: min(820px, 100%);
     margin: 0 auto 24px;
@@ -513,8 +516,33 @@ async function createProject(fromPrompt = true) {
       &.selected, &:hover, &:focus-visible { border-color: var(--el-color-primary); outline-color: var(--el-color-primary); }
       &.selected { background: var(--el-color-primary-light-9); }
     }
-    .workflowCard { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
     @media (max-width: 700px) { grid-template-columns: 1fr; }
+  }
+  .workflowLauncher {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    width: min(820px, 100%);
+    margin: 0 auto 24px;
+    padding: 16px 20px;
+    border: 1px solid var(--el-color-primary);
+    border-radius: var(--ui-radius);
+    background: color-mix(in srgb, var(--el-color-primary-light-9) 72%, var(--el-bg-color-overlay));
+    .workflowCopy {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+      strong { font-size: 16px; }
+      span { color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.7; }
+    }
+    .workflowAction { flex: none; }
+    @media (max-width: 700px) {
+      flex-direction: column;
+      align-items: stretch;
+      .workflowAction { width: 100%; }
+    }
   }
   --sidebarWidth: 240px;
   --sidebarMotion: 220ms;
