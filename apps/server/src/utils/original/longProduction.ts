@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { longBibleSchema, longScenePlanSchema, type LongBible, type LongScenePlan } from "./longTypes";
 import { originalPlanSchema, type OriginalConfig, type OriginalPlan, type OriginalTask } from "./types";
-import { adultDirection, buildAssetPrompt, buildImagePrompt, buildVideoPrompt, explicitStartShot, faceQaApplicable, imageReferenceIds, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds, type StoryBeat } from "./prompt";
+import { adultDirection, buildAssetPrompt, buildImagePrompt, buildVideoPrompt, explicitStartShot, faceQaApplicable, imageReferenceIds, imageReferenceLimit, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds, type StoryBeat } from "./prompt";
 
 export function shotAllocation(shotCount: number, sceneCount: number) {
   return Array.from({ length: sceneCount }, (_, index) => Math.floor(shotCount / sceneCount) + (index < shotCount % sceneCount ? 1 : 0));
@@ -92,7 +92,7 @@ export function buildLongMediaTasks(plan: OriginalPlan, config: OriginalConfig):
     const sceneShots = plan.shots.filter(shot => shot.sceneId === scene);
     for (const [index, shot] of sceneShots.entries()) {
       const previous = index > 0 ? sceneShots[index - 1] : undefined;
-      const imageReferences = imageReferenceIds(shot, previous && config.continuousShots ? previous : undefined);
+      const imageReferences = imageReferenceIds(shot, previous && config.continuousShots ? previous : undefined, imageReferenceLimit(config));
       tasks.push({
         id: `image:${shot.id}`, kind: "image", label: `分镜图：${shot.title}`, status: "pending", sceneId: shot.sceneId,
         prompt: buildImagePrompt(plan, shot, config, imageReferences),

@@ -152,12 +152,19 @@ ${referenceLines.join("\n")}
 ${exclusionBlock(shot)}`;
 }
 
-export function imageReferenceIds(shot: Shot, previous?: Shot) {
+export function imageReferenceLimit(config: OriginalConfig) {
+  if (config.image?.providerId !== "shugando") return 4;
+  if (config.image.modelId === "Dola-Seedream-5.0-Pro-white") return 10;
+  if (config.image.modelId === "seedream-5.0-white") return 14;
+  return 4;
+}
+
+export function imageReferenceIds(shot: Shot, previous: Shot | undefined, limit: number) {
   return [...new Set([
     ...shot.characterIds.map(id => `asset:${id}`),
     ...(previous ? [`image:${previous.id}`] : []),
     `asset:${shot.sceneId}`,
-  ])].slice(0, 4);
+  ])].slice(0, limit);
 }
 
 export function videoReferenceIds(shot: Shot) {

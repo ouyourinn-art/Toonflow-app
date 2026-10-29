@@ -11,7 +11,7 @@ import { lockWorkspaceFiles, resolveWorkspacePath, writeWorkspaceFile } from "@/
 import { inspectVideoFaces, prepareFaceQa } from "./faceQa";
 import { buildLongBiblePrompt, buildLongMediaTasks, buildLongScenePrompt, composeLongPlan, validateLongBible, validateLongScene } from "./longProduction";
 import { longBibleSchema, longScenePlanSchema, type LongScenePlan } from "./longTypes";
-import { adultDirection, buildAssetPrompt, buildFaceCorrectionPrompt, buildImagePrompt, buildVideoPrompt, faceQaApplicable, imageReferenceIds, screenplayInstruction, shortShotDurations, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds } from "./prompt";
+import { adultDirection, buildAssetPrompt, buildFaceCorrectionPrompt, buildImagePrompt, buildVideoPrompt, faceQaApplicable, imageReferenceIds, imageReferenceLimit, screenplayInstruction, shortShotDurations, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds } from "./prompt";
 import { originalPlanSchema, originalRunSchema, type OriginalConfig, type OriginalPlan, type OriginalRun, type OriginalTask } from "./types";
 
 type Control = { state: OriginalRun; pause: boolean; saving: Promise<void> };
@@ -87,6 +87,13 @@ function videoMode(model: MediaModel): MediaGenerationRequest["mode"] {
   const references = modes.find(item => Array.isArray(item) && item.some(value => typeof value === "string" && /^imageReference:[1-9]\d*$/.test(value)));
   if (references) return references;
   return fail("视频模型需要声明首帧或图片参考能力，请选择图生视频模型");
+}
+
+function videoImageReferenceLimit(model: MediaModel) {
+  const modes = Array.isArray(model.mode) ? model.mode : [];
+  const mixed = modes.find(item => Array.isArray(item));
+  const declaration = mixed?.find(value => typeof value === "string" && /^imageReference:[1-9]\d*$/.test(value));
+  return typeof declaration === "string" ? Number(declaration.slice("imageReference:".length)) : 0;
 }
 
 async function preflight(config: OriginalConfig) {
@@ -274,7 +281,7 @@ function buildShortMediaTasks(plan: OriginalPlan, config: OriginalConfig): Origi
   };
   tasks.push(...plan.shots.map<OriginalTask>(shot => {
     const previous = previousShot(shot);
-    const references = imageReferenceIds(shot, previous);
+    const references = imageReferenceIds(shot, previous, imageReferenceLimit(config));
     return { id: `image:${shot.id}`, kind: "image", label: `分镜图：${shot.title}`, status: "pending", sceneId: shot.sceneId, prompt: buildImagePrompt(plan, shot, config, references), references };
   }));
   tasks.push(...plan.shots.map<OriginalTask>(shot => ({
@@ -686,14 +693,15 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
       if (!mediaModel.durationResolutionMap?.some(item => item.duration.includes(request.duration!) && item.resolution.includes(config.resolution))) fail(`视频模型不支持分镜 ${shot.title} 的 ${request.duration} 秒 / ${config.resolution} 组合`);
       request.resolution = config.resolution;
       request.mode = videoMode(mediaModel);
+      const additionalReferenceLimit = videoImageReferenceLimit(mediaModel);
       let referenceMedia = references[0];
-      let additionalReferences = references.slice(1, 5);
+      let additionalReferences = references.slice(1, additionalReferenceLimit + 1);
       if (config.continuousShots) {
         const previousTask = previousVideoTask(state, task);
         if (previousTask) {
           const previous = previousTask.files?.[0] ?? fail("同场上一镜视频尚未完成，无法建立连续首帧");
           referenceMedia = await extractLastFrame(cwd, state, previous, task.id.slice("video:".length));
-          additionalReferences = references.slice(0, 4);
+          additionalReferences = references.slice(0, additionalReferenceLimit);
         }
       }
       if (referenceMedia) {

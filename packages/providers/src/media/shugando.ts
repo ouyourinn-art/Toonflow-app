@@ -77,13 +77,13 @@ export default {
   label: "Shugando",
   icon: "",
   version: "1.0.0",
-  readme: "使用现有 Shugando 网关 Key。GPT Image 参考图通过 multipart 编辑接口提交；Seedream 开白模型先上传参考图，再以 HTTPS 地址调用 JSON 编辑接口。Seedance 支持首帧和最多 4 张附加参考图，均使用已登录媒体服务。视频仅提交一次，随后查询同一任务；错误显示任务编号供核对。",
+  readme: "使用现有 Shugando 网关 Key。GPT Image 参考图通过 multipart 编辑接口提交；Seedream 开白模型先上传参考图，再以 HTTPS 地址调用 JSON 编辑接口。Seedance 支持首帧和最多 9 张附加参考图，均使用已登录媒体服务。视频仅提交一次，随后查询同一任务；错误显示任务编号供核对。",
   rules,
   models: [
     { id: "gpt-image-2.5", label: "GPT Image 2.5", type: "image", mode: ["text", "singleImage", "multiReference"], imageSizes: ["1K"], imageRatios: ["16:9", "9:16", "1:1", "4:3", "3:4"] },
     { id: "seedream-5.0-white", label: "Seedream 5.0 开白", type: "image", mode: ["text", "singleImage", "multiReference"], imageSizes: ["1K"], imageRatios: ["16:9", "9:16", "1:1", "4:3", "3:4"] },
     { id: "Dola-Seedream-5.0-Pro-white", label: "Dola Seedream 5.0 Pro 开白", type: "image", mode: ["text", "singleImage", "multiReference"], imageSizes: ["1K"], imageRatios: ["16:9", "9:16", "1:1", "4:3", "3:4"] },
-    { id: "seedance-2.0-white", label: "Seedance 2.0", type: "video", mode: ["text", "startFrameOptional", ["imageReference:4"]], durationResolutionMap: [{ duration: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], resolution: ["480p", "720p", "1080p"] }] },
+    { id: "seedance-2.0-white", label: "Seedance 2.0", type: "video", mode: ["text", "startFrameOptional", ["imageReference:9"]], durationResolutionMap: [{ duration: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], resolution: ["480p", "720p", "1080p"] }] },
   ] satisfies ProviderModel[],
   async generateImage(request: ImageRequest): Promise<MediaAsset[]> {
     const apiKey = this.config.apiKey.trim();
@@ -94,7 +94,8 @@ export default {
     if (!size || request.size && request.size !== "1K") throw new Error("图片画幅或尺寸不受支持");
     if (request.mask || (request.n ?? 1) !== 1) throw new Error("当前连接仅支持单张无蒙版生成");
     const images = request.images ?? [];
-    if (images.length > 4) throw new Error("Shugando 图片模型最多支持 4 张参考图");
+    const imageLimit = request.model === "gpt-image-2.5" ? 4 : request.model === "Dola-Seedream-5.0-Pro-white" ? 10 : 14;
+    if (images.length > imageLimit) throw new Error(`当前 Shugando 图片模型最多支持 ${imageLimit} 张参考图`);
     const signal = AbortSignal.any([AbortSignal.timeout(15 * 60_000), ...(this.signal ? [this.signal] : [])]);
     const fields = { model: request.model, prompt: request.prompt, size, n: "1", response_format: "url" };
     const whiteSeedream = request.model === "seedream-5.0-white" || request.model === "Dola-Seedream-5.0-Pro-white";
@@ -117,10 +118,10 @@ export default {
     if (request.model !== "seedance-2.0-white") throw new Error("此适配器尚未接入所选视频模型");
     const supportedMode = !request.mode
       || typeof request.mode === "string" && ["text", "startFrameOptional"].includes(request.mode)
-      || Array.isArray(request.mode) && request.mode.every(value => typeof value === "string" && /^imageReference:[1-4]$/.test(value));
-    if (request.lastFrame || request.videos?.length || request.audios?.length || !supportedMode) throw new Error("当前视频连接仅支持文本、单张首帧和最多 4 张附加图片参考");
+      || Array.isArray(request.mode) && request.mode.every(value => value === "imageReference:9");
+    if (request.lastFrame || request.videos?.length || request.audios?.length || !supportedMode) throw new Error("当前 Shugando 视频连接已接入首帧和最多 9 张图片参考；视频与音频参考需等待网关字段实测后启用");
     const references = request.images ?? [];
-    if (references.length > 4) throw new Error("Seedance 视频最多支持 4 张附加参考图");
+    if (references.length > 9) throw new Error("Seedance 2.0 视频最多支持 9 张附加参考图");
     const duration = request.duration ?? 4;
     const resolution = request.resolution ?? "480p";
     const ratios: Record<string, [number, number]> = { "16:9": [16, 9], "9:16": [9, 16], "1:1": [1, 1] };
