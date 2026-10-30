@@ -227,7 +227,7 @@ function validatePlan(plan: OriginalPlan, config: OriginalConfig) {
   }
   if (config.adultExplicit && config.shotCount > 4) {
     const explicitShot = plan.shots.find(shot => shot.storyBeat === "explicitAction")!;
-    const latestExplicitStart = Math.max(8, Math.ceil(targetDuration * 0.25));
+    const latestExplicitStart = targetDuration <= 30 ? 10 : Math.max(8, Math.ceil(targetDuration * 0.25));
     if (explicitShot.startSecond! < 4 || explicitShot.startSecond! > latestExplicitStart) fail(`首次明确成人动作应在 4-${latestExplicitStart} 秒之间，当前从 ${explicitShot.startSecond} 秒开始`);
   }
   if (config.shotCount > 1 && plan.shots.at(-1)?.storyBeat !== "aftermath") fail("最后一镜必须是 aftermath，完成剧情收束");
@@ -376,6 +376,7 @@ function compactAdultDurations(config: OriginalConfig) {
   const minimum = shortShotDurations[0];
   const maximum = shortShotDurations.at(-1)!;
   const target = config.shotCount * config.duration;
+  if (target === 30 && config.shotCount === 5) return [5, 5, 7, 8, 5];
   if (config.shotCount * minimum > target || config.shotCount * maximum < target) fail(`目标总时长 ${target} 秒无法分配给 ${config.shotCount} 镜`);
   const durations = Array.from({ length: config.shotCount }, () => minimum);
   let remaining = target - durations.reduce((sum, value) => sum + value, 0);
@@ -482,7 +483,7 @@ async function planStory(cwd: string, state: OriginalRun) {
     ? adultDirection
     : "内容强度严格跟随用户创作需求，不自行添加露骨成人内容。";
   const fullPrompt = `根据创作需求写出连贯完整的短片剧本与可直接制作的分镜方案。\n需求：${config.brief}\n视觉风格：${config.style || "电影写实"}\n严格锁定 ${config.characterCount} 个角色、${config.shotCount} 个镜头；目标总时长 ${config.shotCount * config.duration} 秒，画幅 ${config.ratio}。系统配置的 ${config.ratio} 是唯一有效画幅，需求文字中的冲突画幅视为旧信息并忽略。\n${adult}\n${screenplayInstruction(config)}\n${config.adultExplicit ? adultStoryLibraryInstruction(config.brief) : ""}\n${storyArcInstruction(config)}\n${timingInstruction(config)}\n${identity}\n${continuity}\n先完成剧本，再从完整剧本整理唯一角色和场景资产，最后按本子中的因果和卡点拆分镜头；同一人的称呼、衣着或姿势变化不能拆成新角色，别名统一归入同一 ID。每镜最多 3 人，必须仅引用资产表中实际出场的角色 ID 和一个场景 ID。每镜填写 storyBeat、shotPurpose、timingReason、framing、characterLayout、cameraId 和 atomicAction；atomicAction 只允许一个主要动作，每镜最多再带一个服装、位置或道具状态转移，超过就必须拆镜。cameraId 标识可共享空间轴线的机位，parentShotId 只引用同机位此前已存在的父镜头。timingReason 必须根据对白字数、动作拍数量和状态变化解释 endSecond-startSecond。characterLayout 必须与 characterIds 完全相同且每人绑定不同的 leftThird / centerThird / rightThird 竖屏区域，写明位置、姿势、朝向与视线。\nassets 的 description 写固定外观和服装或场景布局，imagePrompt 写资产图构图与光照。shots 的 imagePrompt 写本镜第一帧静态构图；videoPrompt 必须按本镜实际时长（endSecond-startSecond）逐段写从 startState 到 endState 的连续动作、运镜、节奏和声音。脱衣、转身、换位、进入、退出等复杂状态变化必须完整显示或拆成独立过渡镜，不能在镜外突然完成。不要把未出场角色、拼贴、字幕或提示词文字画进图。台词只写入 dialogue。\n只输出符合下列 JSON Schema 的一个 JSON 对象，不加代码围栏或解释：\n${JSON.stringify(z.toJSONSchema(originalPlanSchema))}`;
-  const compactPrompt = `你是成人剧情短片编剧。只做剧情与镜头决策，服务器会在本地补全时间轴、资产提示词和严格连续性合同。\n创作需求：${config.brief}\n视觉风格：${config.style || "电影写实"}\n必须恰好返回 ${config.characterCount} 名原创虚构、明确30岁以上、清醒知情且自愿的成年人，以及 ${config.shotCount} 个连续镜头、一个固定场景。人物描述必须包含不可变脸型、五官、发型发色、肤色、身高体型、身体比例和唯一标记。剧情采用 setup → consent → explicitAction → escalation → climax → aftermath：开头快速建立秘密、风险和主动选择；前8秒内完成明确同意并进入首次成人动作；中段升级；结尾必须有关系决定。每个 shot 必须用 atomicAction 写唯一主要动作，最多再包含一个位置、服装或道具状态转移；走位、脱衣、换姿势、取道具和主要成人动作不能全部塞进同一镜头，超过上限必须拆镜。动作镜要明确写出真实性交、插入关系、无遮挡生殖器细节、由人物骨盆整体运动产生的往复以及正确人体连接，不能只写亲吻、拥抱、躺床或镜外暗示；禁止器官自身伸缩、悬浮、错误孔位、重复器官、融合与穿模。严格只有指定角色，不出现第三人。每个 shot 的 startState/endState 都写人物位置、朝向、姿势、衣物状态、手脚、手机、床铺与光线；动作和台词要有因果，不能是同一画面的同义重复。\n${adultStoryLibraryInstruction(config.brief)}\n只输出一个精炼 JSON 对象，不加代码围栏或解释：\n${JSON.stringify(z.toJSONSchema(compactAdultPlanSchema))}`;
+  const compactPrompt = `你是成人剧情短片编剧。只做剧情与镜头决策，服务器会在本地补全时间轴、资产提示词和严格连续性合同。\n创作需求：${config.brief}\n视觉风格：${config.style || "电影写实"}\n必须恰好返回 ${config.characterCount} 名原创虚构、明确30岁以上、清醒知情且自愿的成年人，以及 ${config.shotCount} 个连续镜头、一个固定场景。人物描述必须包含不可变脸型、五官、发型发色、肤色、身高体型、身体比例和唯一标记。${config.shotCount === 5 && config.shotCount * config.duration === 30 ? "本片严格按 30 秒五段式写作：0-5 秒建立关系与风险，5-10 秒完成清醒自愿的选择，10-17 秒第一次明确成人动作，17-25 秒因果升级至高潮，25-30 秒给出关系结果和余韵。" : "剧情采用 setup → consent → explicitAction → escalation → climax → aftermath：开头快速建立秘密、风险和主动选择；前段完成明确同意并进入首次成人动作；中段升级；结尾必须有关系决定。"}每个 shot 必须用 atomicAction 写唯一主要动作，最多再包含一个位置、服装或道具状态转移；走位、脱衣、换姿势、取道具和主要成人动作不能全部塞进同一镜头，超过上限必须拆镜。动作镜要明确写出真实性交、插入关系、无遮挡生殖器细节、由人物骨盆整体运动产生的往复以及正确人体连接，不能只写亲吻、拥抱、躺床或镜外暗示；禁止器官自身伸缩、悬浮、错误孔位、重复器官、融合与穿模。严格只有指定角色，不出现第三人。每个 shot 的 startState/endState 都写人物位置、朝向、姿势、衣物状态、手脚、手机、床铺与光线；动作和台词要有因果，不能是同一画面的同义重复。\n${adultStoryLibraryInstruction(config.brief)}\n只输出一个精炼 JSON 对象，不加代码围栏或解释：\n${JSON.stringify(z.toJSONSchema(compactAdultPlanSchema))}`;
   const prompt = config.adultExplicit ? compactPrompt : fullPrompt;
   state.tasks[0]!.prompt = prompt;
   await write(cwd, `${runDirectory(state)}/languagePrompt.txt`, prompt);

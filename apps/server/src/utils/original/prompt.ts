@@ -35,6 +35,7 @@ export function storyBeatOrder(config: OriginalConfig): StoryBeat[] {
   if (config.adultExplicit && config.shotCount === 2) return ["explicitAction", "aftermath"];
   if (config.adultExplicit && config.shotCount === 3) return ["setup", "explicitAction", "aftermath"];
   if (config.adultExplicit && config.shotCount === 4) return ["setup", "explicitAction", "climax", "aftermath"];
+  if (config.adultExplicit && config.shotCount === 5) return ["setup", "consent", "explicitAction", "climax", "aftermath"];
   return config.adultExplicit
     ? ["setup", "consent", "explicitAction", "escalation", "climax", "aftermath"]
     : ["setup", "escalation", "climax", "aftermath"];
@@ -47,6 +48,9 @@ export function storyArcInstruction(config: OriginalConfig) {
   if (config.adultExplicit && config.shotCount === 4) {
     return `这是有完整剧情的成人短片。四镜依次为 setup（建立人物、欲望与明确同意）→ explicitAction（进入清楚的成人动作）→ climax（用新的体位或机位达到主高潮）→ aftermath（动作结束后的亲密余韵）。每镜只承担一个因果连续的剧情任务，不能四镜共用同一首帧，也不能把故事退化成同一交合画面的重复裁切。`;
   }
+  if (config.adultExplicit && config.shotCount === 5 && config.shotCount * config.duration === 30) {
+    return "这是严格 30 秒、有完整剧情的成人短片，不是动作集锦。五镜依次为：0-5 秒 setup（建立人物、关系、秘密或风险）→ 5-10 秒 consent（用选择、台词和反应完成明确同意）→ 10-17 秒 explicitAction（第一次明确成人动作）→ 17-25 秒 climax（因前一镜自然升级的主高潮）→ 25-30 秒 aftermath（动作结束后的关系结果和余韵）。每镜只承担一个剧情任务，前两镜不能只做无信息的接吻，后三镜不能成为同一动作的重复裁切。";
+  }
   if (config.adultExplicit && config.shotCount === 3) {
     return `这是有完整剧情的成人短片。三镜依次为 setup（建立关系、欲望与明确同意）→ explicitAction（进入清楚的成人动作并完成高潮）→ aftermath（动作结束后的亲密余韵）。三镜必须使用各自匹配剧情的独立首帧，不能重复裁切同一画面。`;
   }
@@ -58,7 +62,7 @@ export function storyArcInstruction(config: OriginalConfig) {
     : "setup（建立人物与目标）→ escalation（冲突升级）→ climax（高潮）→ aftermath（有因果结果的收束）";
   const targetDuration = config.shotCount * config.duration;
   const adultShots = config.adultExplicit
-    ? ` 先用人物处境、秘密或风险建立戏剧张力并完成明确同意，首次 explicitAction 应在全片开头约 10%-25% 之间发生（本片最迟 ${Math.max(8, Math.ceil(targetDuration * 0.25))} 秒前进入），不能一开场毫无关系铺垫，也不能拖到半片以后。explicitAction 镜必须清楚呈现双方自愿的性交与插入关系；全片至少安排一个无遮挡的生殖器细节特写，framing 和 shotPurpose 必须明确写出该特写，不能用亲吻、拥抱或远景替代。最后一镜必须是 aftermath。`
+    ? ` 先用人物处境、秘密或风险建立戏剧张力并完成明确同意，首次 explicitAction 应在全片开头约 10%-33% 之间发生（本片最迟 ${targetDuration <= 30 ? 10 : Math.max(8, Math.ceil(targetDuration * 0.25))} 秒前进入），不能一开场毫无关系铺垫，也不能拖到半片以后。explicitAction 镜必须清楚呈现双方自愿的性交与插入关系；全片至少安排一个无遮挡的生殖器细节特写，framing 和 shotPurpose 必须明确写出该特写，不能用亲吻、拥抱或远景替代。最后一镜必须是 aftermath。`
     : " 最后一镜必须是 aftermath。";
   return `完整故事必须覆盖 ${beats}，每镜只承担一个清楚的 storyBeat 和 shotPurpose；相邻镜头不得只是更换同义动作。${adultShots}`;
 }

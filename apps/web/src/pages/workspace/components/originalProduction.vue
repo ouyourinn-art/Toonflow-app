@@ -9,8 +9,8 @@
       <template v-if="editing">
         <div class="presetGrid">
           <div class="presetBar">
-            <div><strong>韩国成人剧情 1 分钟竖屏短片</strong><span>先按动漫本子写完整剧情，再按对白、动作与卡点把 12 镜自动分配为 4-15 秒，总长精确 60 秒。</span></div>
-            <el-button type="danger" size="large" :disabled="busy || !statusReady" @click="applyAdult60Preset">套用 1 分钟</el-button>
+            <div><strong>韩国成人剧情 30 秒竖屏短片</strong><span>先写完整 30 秒剧本，再按 0-5 / 5-10 / 10-17 / 17-25 / 25-30 秒拆成五个因果连续镜头。</span></div>
+            <el-button type="danger" size="large" :disabled="busy || !statusReady" @click="applyAdult30Preset">套用 30 秒</el-button>
           </div>
           <div class="presetBar longPreset">
             <div><strong>韩国成人露骨 10 分钟竖屏长片</strong><span>原创虚构韩国成年人，40 镜 × 15 秒，分场锚定、逐镜验脸、跨场并发。</span></div>
@@ -75,7 +75,7 @@
               <el-select v-model="form.resolution" :disabled="!resolutions.length"><el-option v-for="resolution in resolutions" :key="resolution" :value="resolution" :label="resolution" /></el-select>
             </el-form-item>
             <el-form-item label="质量档">
-              <el-radio-group v-model="form.qualityTier"><el-radio-button value="draft">预览优先 720p</el-radio-button><el-radio-button value="final">成片优先 1080p</el-radio-button></el-radio-group>
+              <el-radio-group v-model="form.qualityTier"><el-radio-button value="draft">快速成片 480p</el-radio-button><el-radio-button value="final">高清成片 1080p</el-radio-button></el-radio-group>
             </el-form-item>
             <el-form-item label="最终合成"><el-switch v-model="form.stitch" activeText="按镜头顺序自动合成 MP4" /></el-form-item>
           </div>
@@ -321,11 +321,11 @@ async function syncVideoPrice() {
   } finally { priceLoading.value = false; }
 }
 
-function applyAdult60Preset() {
+function applyAdult30Preset() {
   Object.assign(form, {
     productionMode: "short",
     style: "原创虚构韩国成年人，现代韩国人物造型与环境细节，不仿照真实人物；电影级写实摄影、暖色自然光、真实皮肤纹理，固定角色设计，连贯卧室空间和专业剧情镜头语言",
-    characterCount: 2, shotCount: 12, ratio: "9:16", duration: 5, stitch: true,
+    characterCount: 2, shotCount: 5, ratio: "9:16", duration: 6, stitch: true,
     targetDurationMinutes: 10, sceneCount: 1, maxRetries: 2, costLimit: 0, costPerVideo: 2.01,
     faceQaEnabled: true, faceThreshold: 0.363, adultExplicit: true, characterLock: true, continuousShots: true,
     qualityTier: "draft", imageConcurrency: 6, videoConcurrency: 4,
@@ -339,8 +339,8 @@ function selectAdultModels() {
   if (video) {
     videoValue.value = modelValue(video);
     const choices = video.durationResolutionMap?.filter(item => item.duration.includes(form.duration)).flatMap(item => item.resolution) ?? [];
-    const preferred = form.qualityTier === "final" ? "1080p" : "720p";
-    form.resolution = choices.includes(preferred) ? preferred : choices.includes("720p") ? "720p" : choices[0] ?? "";
+    const preferred = form.qualityTier === "final" ? "1080p" : "480p";
+    form.resolution = choices.includes(preferred) ? preferred : choices.includes("480p") ? "480p" : choices[0] ?? "";
   }
   const image = imageModels.value.find(model => model.modelId.trim().toLowerCase() === "dola-seedream-5.0-pro-white")
     ?? imageModels.value.find(model => model.modelId.trim().toLowerCase() === "seedream-5.0-white")
@@ -456,11 +456,11 @@ watch(ratios, values => { if (!values.includes(form.ratio) && values[0]) form.ra
 watch(durations, values => { if (!values.includes(form.duration)) form.duration = values.includes(15) ? 15 : values[0] ?? 0; });
 watch(resolutions, values => {
   if (values.includes(form.resolution)) return;
-  const preferred = form.qualityTier === "final" ? "1080p" : "720p";
-  form.resolution = values.includes(preferred) ? preferred : values.includes("720p") ? "720p" : values[0] ?? "";
+  const preferred = form.qualityTier === "final" ? "1080p" : "480p";
+  form.resolution = values.includes(preferred) ? preferred : values.includes("480p") ? "480p" : values[0] ?? "";
 });
 watch(() => form.qualityTier, tier => {
-  const preferred = tier === "final" ? "1080p" : "720p";
+  const preferred = tier === "final" ? "1080p" : "480p";
   if (resolutions.value.includes(preferred)) form.resolution = preferred;
 });
 watch([selectedVideo, () => form.ratio, () => form.duration, () => form.resolution], () => {
