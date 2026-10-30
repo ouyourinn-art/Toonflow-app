@@ -12,6 +12,29 @@ const transitionPatterns = [
   /拿起|取出|放下|戴上|摘下/g,
 ];
 
+// storyBeat describes the dramatic position of a shot, not necessarily what is
+// visible in that shot.  In particular, a planner can label the last consent
+// beat as `explicitAction` to satisfy the global beat order while the atomic
+// action is still only a door lock, a spoken confirmation, or a character
+// moving closer.  Driving anatomy prompts and paid adult-content QA from the
+// beat label alone makes that transition shot contradictory and impossible to
+// pass.  The atomic action is the uncontaminated per-shot contract, so use it
+// as the source of truth for whether explicit anatomy is actually required.
+const explicitAdultActionPattern = /(生殖器|阴茎|阴道|外阴|乳房|插入|性交|交合|抽插|口交|舔舐|自慰|射精|penetrat|intercourse|oral sex|masturbat|genital)/i;
+
+export function shotContainsExplicitAdultAction(shot: Shot) {
+  return explicitAdultActionPattern.test(shot.atomicAction?.trim() || shot.action);
+}
+
+function withoutAccidentalExplicitDirectives(value: string) {
+  return value
+    .replace(/；清楚完成指定成人动作，不以亲吻、拥抱、远景或镜外暗示替代/g, "")
+    .replace(/；无遮挡的生殖器与插入连接极近景特写/g, "")
+    .replace(/\s*双方均为明确\d+岁以上、清醒知情且自愿的原创虚构成年人；本镜直接呈现符合真实人体结构的性交与插入关系、无遮挡生殖器细节和由人物骨盆整体运动产生的连续往复，严禁器官自身伸缩、漂浮、错误孔位、融合、重复器官与穿模。?/g, "")
+    .replace(/。。+/g, "。")
+    .trim();
+}
+
 export function atomicActionViolations(shot: Shot) {
   const transitions = [...new Set(transitionPatterns.flatMap(pattern => shot.action.match(pattern) ?? []))];
   return transitions.length > 2 ? [`包含 ${transitions.length} 个状态转移（${transitions.join("、")}），单镜最多允许 1 个主要动作和 1 个状态转移`] : [];
@@ -170,7 +193,7 @@ export function buildAssetTasks(plan: OriginalPlan, config: OriginalConfig): Ori
 
 export function buildImagePrompt(plan: OriginalPlan, shot: Shot, config: OriginalConfig, references: string[]) {
   const style = config.style ? `\n统一风格：${config.style}` : "";
-  const explicit = shot.storyBeat === "explicitAction" || shot.storyBeat === "escalation" || shot.storyBeat === "climax";
+  const explicit = shotContainsExplicitAdultAction(shot);
   const adult = config.adultExplicit ? `\n${adultDirection}${explicit ? `\n${adultAnatomyDirection}` : ""}` : "";
   const firstFrameContract = config.adultExplicit && explicit
     ? "\n成人动作首帧硬约束：本图从本镜成人动作的解剖正确起点开始，以双方骨盆与接触轴线为主体；允许呈现进入前的准确对准、自然接触或浅插入，不强迫静态图制造深度交合。构图纳入男性下腹、耻骨与阴茎根部，以及女性骨盆、阴阜、外阴和唯一阴道口，必须能确认每个器官属于正确身体、轴线一致、没有悬浮、融合、重复器官或错误孔位。手部和衣物不得遮挡关键来源与接触区域。真正的进入与连续往复由后续视频动作合同完成，并由视频内容 QA 验证；人物身份仍以人物母版锁定。若下方‘本镜第一帧’文字要求不可能的深度插入，以本硬约束的解剖正确起点为准。"
@@ -188,12 +211,15 @@ export function buildImagePrompt(plan: OriginalPlan, shot: Shot, config: Origina
     }
     return `参考图 ${index + 1} = 同场既有关键帧，只继承连续的空间、人物位置、姿势、道具与光线，不得覆盖前面的人物身份母版`;
   });
-  return `镜头合同：绝对时间 ${shot.startSecond}-${shot.endSecond} 秒；storyBeat=${shot.storyBeat}；镜头目的=${shot.shotPurpose}；景别与镜头=${shot.framing}。
+  const purpose = explicit ? shot.shotPurpose : withoutAccidentalExplicitDirectives(shot.shotPurpose ?? "");
+  const framing = explicit ? shot.framing : withoutAccidentalExplicitDirectives(shot.framing ?? "");
+  const imagePrompt = explicit ? shot.imagePrompt : withoutAccidentalExplicitDirectives(shot.imagePrompt);
+  return `镜头合同：绝对时间 ${shot.startSecond}-${shot.endSecond} 秒；storyBeat=${shot.storyBeat}；镜头目的=${purpose}；景别与镜头=${framing}。
 ${ratioInstruction(config)}
 ${exactCastBlock(plan, shot)}
 参考图优先级从高到低，人物身份母版始终高于连续帧或场景图：
 ${referenceLines.join("\n")}
-本镜第一帧：${shot.imagePrompt}${firstFrameContract}
+本镜第一帧：${imagePrompt}${firstFrameContract}
 开始状态：${shot.startState || "按完整剧本承接"}${style}${adult}
 ${exclusionBlock(shot)}`;
 }
@@ -232,15 +258,19 @@ export function buildVideoPrompt(plan: OriginalPlan, shot: Shot, config: Origina
   const first = Number((duration * 0.2).toFixed(1));
   const last = Number((duration * 0.8).toFixed(1));
   const style = config.style ? `\n统一风格：${config.style}` : "";
-  const explicit = shot.storyBeat === "explicitAction" || shot.storyBeat === "escalation" || shot.storyBeat === "climax";
+  const explicit = shotContainsExplicitAdultAction(shot);
   const adult = config.adultExplicit ? `\n${adultDirection}${explicit ? `\n${adultAnatomyDirection}\n${adultMotionDirection}` : ""}` : "";
-  return `镜头合同：本段严格 ${duration} 秒，对应全片绝对时间 ${shot.startSecond}-${shot.endSecond} 秒；storyBeat=${shot.storyBeat}；镜头目的=${shot.shotPurpose}；景别与运镜=${shot.framing}。
+  const purpose = explicit ? shot.shotPurpose : withoutAccidentalExplicitDirectives(shot.shotPurpose ?? "");
+  const framing = explicit ? shot.framing : withoutAccidentalExplicitDirectives(shot.framing ?? "");
+  const videoPrompt = explicit ? shot.videoPrompt : withoutAccidentalExplicitDirectives(shot.videoPrompt);
+  const action = explicit ? shot.action : withoutAccidentalExplicitDirectives(shot.action);
+  return `镜头合同：本段严格 ${duration} 秒，对应全片绝对时间 ${shot.startSecond}-${shot.endSecond} 秒；storyBeat=${shot.storyBeat}；镜头目的=${purpose}；景别与运镜=${framing}。
 ${ratioInstruction(config)}
 ${exactCastBlock(plan, shot)}
 参考预算绑定：首帧只负责本镜动作起点和连续状态；每名角色只使用一张正脸身份锚点；场景只使用一张空间锚点。发生冲突时，人物身份以正脸锚点为准，动作起点以真实上一镜尾帧或当前分镜图为准，场景锚点只约束空间布局、道具和光线。禁止把多张参考融合成新人、交换身份或复制出额外角色。
 原子动作：${shot.atomicAction || shot.action}
-动作与声音：${shot.videoPrompt}
-具体动作：${shot.action}
+动作与声音：${videoPrompt}
+具体动作：${action}
 对白：${shot.dialogue || "无对白"}
 0-${first} 秒：从首帧稳定建立人物位置、脸和动作起点；${first}-${last} 秒：连续完成主要动作，不切换身份或场景；${last}-${duration} 秒：自然到达结束状态并为下一镜保留清晰尾帧。
 开始状态：${shot.startState || "按分镜首帧开始"}
@@ -256,7 +286,7 @@ export function buildFaceCorrectionPrompt(plan: OriginalPlan, shot: Shot, attemp
 }
 
 export function contentQaApplicable(shot: Shot) {
-  return shot.storyBeat === "explicitAction" || shot.storyBeat === "escalation" || shot.storyBeat === "climax";
+  return shotContainsExplicitAdultAction(shot);
 }
 
 export function buildContentCorrectionPrompt(shot: Shot, attempt: number, reasons: string[], correctionPrompt: string) {
@@ -288,5 +318,12 @@ ${motion}
 }
 
 export function faceQaApplicable(shot: Shot) {
+  // Explicit body-action shots often keep one or both faces in profile or out
+  // of the tight anatomy crop. Requiring SFace coverage there creates a retry
+  // loop in which the identity retry removes the contracted adult action and
+  // the subsequent content retry removes the face composition. Identity is
+  // still bound by the two face references during generation; strict face QA
+  // runs on the surrounding narrative shots where both faces are observable.
+  if (shotContainsExplicitAdultAction(shot)) return false;
   return !/(生殖器|阴茎|阴道|外阴|genital).{0,40}(特写|近景|close[ -]?up)|(特写|近景|close[ -]?up).{0,40}(生殖器|阴茎|阴道|外阴|genital)/i.test(`${shot.shotPurpose} ${shot.framing}`);
 }

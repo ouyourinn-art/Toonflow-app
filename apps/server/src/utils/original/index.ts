@@ -11,7 +11,7 @@ import { lockWorkspaceFiles, resolveWorkspacePath, writeWorkspaceFile } from "@/
 import { inspectVideoFaces, prepareFaceQa } from "./faceQa";
 import { buildLongBiblePrompt, buildLongMediaTasks, buildLongScenePrompt, composeLongPlan, validateLongBible, validateLongScene } from "./longProduction";
 import { longBibleSchema, longScenePlanSchema, type LongScenePlan } from "./longTypes";
-import { adultDirection, atomicActionViolations, buildAssetTasks, buildContentCorrectionPrompt, buildFaceCorrectionPrompt, buildFaceRetryVideoPrompt, buildImagePrompt, buildVideoPrompt, characterIdentityTaskId, contentQaApplicable, faceQaApplicable, imageReferenceIds, imageReferenceLimit, screenplayInstruction, shortShotDurations, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds } from "./prompt";
+import { adultDirection, atomicActionViolations, buildAssetTasks, buildContentCorrectionPrompt, buildFaceCorrectionPrompt, buildFaceRetryVideoPrompt, buildImagePrompt, buildVideoPrompt, characterIdentityTaskId, contentQaApplicable, faceQaApplicable, imageReferenceIds, imageReferenceLimit, screenplayInstruction, shortShotDurations, shotContainsExplicitAdultAction, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds } from "./prompt";
 import { originalPlanSchema, originalRunSchema, type OriginalConfig, type OriginalPlan, type OriginalRun, type OriginalTask } from "./types";
 import { adultStoryLibraryInstruction, adultStoryLibrarySnapshot } from "./adultStoryLibrary";
 
@@ -198,6 +198,7 @@ function validatePlan(plan: OriginalPlan, config: OriginalConfig) {
     if ((config.productionMode === "long" || !config.adultExplicit) && duration !== config.duration) fail(`分镜 ${shot.id} 的时长必须固定为 ${config.duration} 秒`);
     expectedStart = shot.endSecond!;
     if (!shot.storyBeat || !shot.shotPurpose || config.productionMode === "short" && !shot.timingReason || !shot.framing) fail(`分镜 ${shot.id} 缺少剧情节拍、镜头目的、时长判断或景别`);
+    if (config.adultExplicit && shot.storyBeat === "explicitAction" && !shotContainsExplicitAdultAction(shot)) fail(`分镜 ${shot.id} 标记为 explicitAction，但原子动作并未包含明确成人行为；请保留该镜的同意/剧情动作，并把 explicitAction 放到真正发生成人行为的下一镜`);
     if (!shot.cameraId || !shot.atomicAction) fail(`分镜 ${shot.id} 缺少机位树或原子动作合同`);
     const atomicViolations = atomicActionViolations(shot);
     if (atomicViolations.length) fail(`分镜 ${shot.id} 不是原子镜头：${atomicViolations.join("；")}。请拆成多个镜头后再生成媒体。`);
@@ -1061,7 +1062,12 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
       const additionalReferenceLimit = videoImageReferenceLimit(mediaModel);
       let referenceMedia = references[0];
       let additionalReferences = references.slice(1, additionalReferenceLimit + 1);
-      if (config.continuousShots) {
+      // Narrative shots inherit the exact prior tail. Explicit body-action
+      // shots instead start from their own storyboard keyframe: forcing a
+      // clothed prior tail makes a 6-second shot spend its whole budget
+      // undressing and leaves no time for the contracted action. Character and
+      // scene references plus start/end-state prompts still carry continuity.
+      if (config.continuousShots && videoShot && !shotContainsExplicitAdultAction(videoShot)) {
         const previousTask = previousVideoTask(state, task);
         if (previousTask) {
           const previous = previousTask.files?.[0] ?? fail("同场上一镜视频尚未完成，无法建立连续首帧");
@@ -1284,6 +1290,115 @@ export async function start(cwd: string, id: string, config: OriginalConfig, pre
   } finally { changing.delete(directoryKey); }
 }
 
+function reconcileLegacyContentQaScope(state: OriginalRun) {
+  if (!state.plan) return;
+  const invalidTasks = state.tasks.filter(task => {
+    if (task.kind !== "contentQa") return false;
+    const shot = state.plan!.shots.find(item => task.id === `contentQa:${item.id}`);
+    return Boolean(shot && !contentQaApplicable(shot));
+  });
+  if (!invalidTasks.length) return;
+
+  // Older runs could force a consent/transition shot through anatomy QA solely
+  // because its dramatic beat was named `explicitAction`. Drop that impossible
+  // gate and rebuild this point plus downstream continuity media. Earlier
+  // accepted shots and paid identity/scene assets remain untouched.
+  const invalidIds = new Set(invalidTasks.map(task => task.id));
+  const firstAffected = Math.min(...invalidTasks.map(task => state.plan!.shots.findIndex(shot => task.id === `contentQa:${shot.id}`)));
+  const affectedShotIds = new Set(state.plan.shots.slice(firstAffected).map(shot => shot.id));
+  state.tasks = state.tasks.filter(task => !invalidIds.has(task.id));
+
+  for (const task of state.tasks) {
+    const match = /^(?:image|video|qa|contentQa):(.+)$/.exec(task.id);
+    if (task.kind !== "export" && (!match || !affectedShotIds.has(match[1]!))) continue;
+    task.status = "pending";
+    delete task.error;
+    delete task.files;
+    delete task.referenceFrame;
+    delete task.qa;
+    delete task.contentQa;
+    delete task.imageQa;
+    delete task.attempts;
+    delete task.qaAttempts;
+    delete task.contentQaAttempts;
+    if (task.kind === "video") {
+      const shot = state.plan.shots.find(item => task.id === `video:${item.id}`)!;
+      task.prompt = buildVideoPrompt(state.plan, shot, state.config);
+    }
+  }
+}
+
+function reconcileLegacyFaceQaScope(state: OriginalRun) {
+  if (!state.plan) return;
+  const invalidTasks = state.tasks.filter(task => {
+    if (task.kind !== "qa") return false;
+    const shot = state.plan!.shots.find(item => task.id === `qa:${item.id}`);
+    return Boolean(shot && !faceQaApplicable(shot));
+  });
+  if (!invalidTasks.length) return;
+
+  const invalidIds = new Set(invalidTasks.map(task => task.id));
+  const retriedShotIndexes = invalidTasks
+    .map(task => state.plan!.shots.findIndex(shot => task.id === `qa:${shot.id}`))
+    .filter(index => index >= 0 && (state.tasks.find(task => task.id === `video:${state.plan!.shots[index]!.id}`)?.qaAttempts ?? 0) > 0);
+  state.tasks = state.tasks.filter(task => !invalidIds.has(task.id));
+  if (!retriedShotIndexes.length) return;
+
+  // A face-retry prompt deliberately simplifies motion. If that retry was
+  // already used on a body-action shot, regenerate the shot once from its real
+  // contract before sending it to content QA, then rebuild downstream videos.
+  const firstAffected = Math.min(...retriedShotIndexes);
+  const affectedShotIds = new Set(state.plan.shots.slice(firstAffected).map(shot => shot.id));
+  for (const task of state.tasks) {
+    const match = /^(?:video|qa|contentQa):(.+)$/.exec(task.id);
+    if (task.kind !== "export" && (!match || !affectedShotIds.has(match[1]!))) continue;
+    task.status = "pending";
+    delete task.error;
+    delete task.files;
+    delete task.referenceFrame;
+    delete task.qa;
+    delete task.contentQa;
+    delete task.attempts;
+    delete task.qaAttempts;
+    delete task.contentQaAttempts;
+    if (task.kind === "video") {
+      const shot = state.plan.shots.find(item => task.id === `video:${item.id}`)!;
+      task.prompt = buildVideoPrompt(state.plan, shot, state.config);
+    }
+  }
+}
+
+function reconcileExplicitContinuitySource(state: OriginalRun) {
+  if (!state.plan) return;
+  const legacyVideos = state.tasks.filter(task => {
+    if (task.kind !== "video" || !task.referenceFrame?.includes("/continuity/") || !(task.contentQaAttempts ?? 0)) return false;
+    const shot = state.plan!.shots.find(item => task.id === `video:${item.id}`);
+    return Boolean(shot && shotContainsExplicitAdultAction(shot));
+  });
+  if (!legacyVideos.length) return;
+
+  const legacyVideoIds = new Set(legacyVideos.map(task => task.id));
+  const firstAffected = Math.min(...legacyVideos.map(task => state.plan!.shots.findIndex(shot => task.id === `video:${shot.id}`)));
+  const affectedShotIds = new Set(state.plan.shots.slice(firstAffected).map(shot => shot.id));
+  for (const task of state.tasks) {
+    const match = /^(?:video|qa|contentQa):(.+)$/.exec(task.id);
+    if (task.kind !== "export" && (!match || !affectedShotIds.has(match[1]!))) continue;
+    task.status = "pending";
+    delete task.error;
+    delete task.files;
+    delete task.referenceFrame;
+    delete task.qa;
+    delete task.contentQa;
+    delete task.attempts;
+    if (task.kind === "video" && !legacyVideoIds.has(task.id)) {
+      const shot = state.plan.shots.find(item => task.id === `video:${item.id}`)!;
+      task.prompt = buildVideoPrompt(state.plan, shot, state.config);
+      delete task.qaAttempts;
+      delete task.contentQaAttempts;
+    }
+  }
+}
+
 export async function control(cwd: string, id: string, action: "pause" | "resume", acceptUncertain = false) {
   const directoryKey = key(cwd);
   if (changing.has(directoryKey)) return fail("工作流状态正在更新，请稍后重试", 409);
@@ -1300,16 +1415,21 @@ export async function control(cwd: string, id: string, action: "pause" | "resume
     if (state.status === "completed") return state;
     if ((state.status === "interrupted" || state.tasks.some(task => task.status === "running")) && !acceptUncertain) fail("上次进行中的请求可能已计费，请核对上游记录后确认重试", 409);
     if (state.status === "failed" && acceptUncertain) {
-      // Adult-content QA is advisory only when the user explicitly chooses a
-      // preview continuation. Keep the failed scores/reasons in the task so
-      // the result is never reported as QA-passed, but unblock later shots and
-      // the export stage for an auditable preview.
+      // QA is advisory only when the user explicitly chooses a preview
+      // continuation. Keep the failed scores/reasons in the task so the
+      // result is never reported as QA-passed, but unblock later shots and the
+      // export stage for an auditable preview.
       for (const task of state.tasks) {
-        if (task.kind !== "contentQa" || task.status !== "failed") continue;
+        if ((task.kind !== "contentQa" && task.kind !== "qa") || task.status !== "failed") continue;
         task.status = "completed";
-        task.error = "已按用户选择继续；本镜成人内容 QA 未通过，结果仅作为预览。";
+        task.error = task.kind === "contentQa"
+          ? "已按用户选择继续；本镜成人内容 QA 未通过，结果仅作为预览。"
+          : "已按用户选择继续；本镜人物一致性 QA 未通过，结果仅作为预览。";
       }
     }
+    reconcileLegacyContentQaScope(state);
+    reconcileLegacyFaceQaScope(state);
+    reconcileExplicitContinuitySource(state);
     const models = await preflight(state.config);
     for (const task of state.tasks) if (task.status !== "completed") { task.status = "pending"; delete task.error; }
     state.status = "running";

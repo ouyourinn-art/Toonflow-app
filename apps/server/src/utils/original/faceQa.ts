@@ -26,10 +26,15 @@ payload = json.load(sys.stdin)
 detector = cv2.FaceDetectorYN.create(payload["detector"], "", (320, 320), 0.75, 0.3, 5000)
 recognizer = cv2.FaceRecognizerSF.create(payload["recognizer"], "")
 
-def features(image):
+def features(image, score_threshold=0.75):
     if image is None or image.size == 0:
         return []
     height, width = image.shape[:2]
+    if max(height, width) > 1024:
+        scale = 1024.0 / max(height, width)
+        image = cv2.resize(image, (round(width * scale), round(height * scale)), interpolation=cv2.INTER_AREA)
+        height, width = image.shape[:2]
+    detector.setScoreThreshold(score_threshold)
     detector.setInputSize((width, height))
     faces = detector.detect(image)[1]
     if faces is None:
@@ -99,10 +104,10 @@ elif detected / sampled < 0.35:
 for key, value in coverage.items():
     if value < 0.10:
         reasons.append("角色 " + key + " 的同人脸画面少于 10%")
-if total_faces and unknown / total_faces > 0.20:
-    reasons.append("陌生或无法匹配的人脸超过 20%")
-if sampled and duplicates / sampled > 0.10:
-    reasons.append("同一角色在单帧内重复出现的比例超过 10%")
+if total_faces and unknown / total_faces > 0.25:
+    reasons.append("陌生或无法匹配的人脸超过 25%")
+if sampled and duplicates / sampled > 0.15:
+    reasons.append("同一角色在单帧内重复出现的比例超过 15%")
 print(json.dumps({"passed": len(reasons) == 0, "sampledFrames": sampled, "detectedFrames": detected, "unknownFaces": unknown, "duplicateFrames": duplicates, "characterCoverage": coverage, "averageScores": averages, "reasons": reasons}, ensure_ascii=False))
 `;
 
