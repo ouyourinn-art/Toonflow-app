@@ -260,6 +260,9 @@ export function buildVideoPrompt(plan: OriginalPlan, shot: Shot, config: Origina
   const style = config.style ? `\n统一风格：${config.style}` : "";
   const explicit = shotContainsExplicitAdultAction(shot);
   const adult = config.adultExplicit ? `\n${adultDirection}${explicit ? `\n${adultAnatomyDirection}\n${adultMotionDirection}` : ""}` : "";
+  const continuityLock = config.continuousShots && shot.parentShotId
+    ? `\n关键帧链锁定：本镜父镜头为 ${shot.parentShotId}。视频首帧必须承接该父镜头已通过 QA 的最后一帧；不得使用另一镜头的首帧重置人物、服装、姿势、道具或灯光。当前分镜图只作动作构图补充，不能覆盖真实连续尾帧。`
+    : "";
   const purpose = explicit ? shot.shotPurpose : withoutAccidentalExplicitDirectives(shot.shotPurpose ?? "");
   const framing = explicit ? shot.framing : withoutAccidentalExplicitDirectives(shot.framing ?? "");
   const videoPrompt = explicit ? shot.videoPrompt : withoutAccidentalExplicitDirectives(shot.videoPrompt);
@@ -275,7 +278,7 @@ ${exactCastBlock(plan, shot)}
 0-${first} 秒：从首帧稳定建立人物位置、脸和动作起点；${first}-${last} 秒：连续完成主要动作，不切换身份或场景；${last}-${duration} 秒：自然到达结束状态并为下一镜保留清晰尾帧。
 开始状态：${shot.startState || "按分镜首帧开始"}
 结束状态：${shot.endState || "按完整剧本结束"}
-衔接：${shot.continuity || "按完整剧本连续承接"}${style}${adult}
+ 衔接：${shot.continuity || "按完整剧本连续承接"}${continuityLock}${style}${adult}
 全段是一个连续镜头，不重置动作，不突然换人、增人、消失、换脸、换发型、换体型、换场景或切成蒙太奇。${exclusionBlock(shot)}`;
 }
 

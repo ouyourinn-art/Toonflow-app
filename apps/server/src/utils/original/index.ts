@@ -11,7 +11,7 @@ import { lockWorkspaceFiles, resolveWorkspacePath, writeWorkspaceFile } from "@/
 import { inspectVideoFaces, prepareFaceQa } from "./faceQa";
 import { buildLongBiblePrompt, buildLongMediaTasks, buildLongScenePrompt, composeLongPlan, validateLongBible, validateLongScene } from "./longProduction";
 import { longBibleSchema, longScenePlanSchema, type LongScenePlan } from "./longTypes";
-import { adultDirection, atomicActionViolations, buildAssetTasks, buildContentCorrectionPrompt, buildFaceCorrectionPrompt, buildFaceRetryVideoPrompt, buildImagePrompt, buildVideoPrompt, characterIdentityTaskId, contentQaApplicable, faceQaApplicable, imageReferenceIds, imageReferenceLimit, screenplayInstruction, shortShotDurations, shotContainsExplicitAdultAction, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds } from "./prompt";
+import { adultDirection, atomicActionViolations, buildAssetTasks, buildContentCorrectionPrompt, buildFaceCorrectionPrompt, buildImagePrompt, buildVideoPrompt, characterIdentityTaskId, contentQaApplicable, faceQaApplicable, imageReferenceIds, imageReferenceLimit, screenplayInstruction, shortShotDurations, shotContainsExplicitAdultAction, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds } from "./prompt";
 import { originalPlanSchema, originalRunSchema, type OriginalConfig, type OriginalPlan, type OriginalRun, type OriginalTask } from "./types";
 import { adultStoryLibraryInstruction, adultStoryLibrarySnapshot } from "./adultStoryLibrary";
 
@@ -242,6 +242,7 @@ function validatePlan(plan: OriginalPlan, config: OriginalConfig) {
       if (!shot.startState || !shot.endState || index > 0 && !shot.continuity) fail(`分镜 ${shot.id} 缺少连续状态，已在生图前停止`);
       const previous = plan.shots[index - 1];
       if (previous?.sceneId === shot.sceneId && previous.endState?.trim() !== shot.startState!.trim()) fail(`分镜 ${shot.id} 的开始状态没有逐字继承同场上一镜结束状态`);
+      if (previous?.sceneId === shot.sceneId && shot.parentShotId !== previous.id) fail(`分镜 ${shot.id} 必须把同场上一镜 ${previous.id} 作为关键帧父镜头，不能跳过连续链`);
     }
   }
   const used = new Set(plan.shots.flatMap(shot => [...shot.characterIds, shot.sceneId]));
@@ -911,7 +912,7 @@ async function publishCompleted(cwd: string, state: OriginalRun) {
   await publishCanvas(cwd, state, "storyboard", "导演分镜", plan.shots.map((shot, index) => `## ${index + 1}. ${shot.title}\n\n绝对时间：${shot.startSecond}-${shot.endSecond}s · 本镜 ${shotDuration(shot)}s · 剧情节拍：${shot.storyBeat} · 镜头目的：${shot.shotPurpose}\n\n机位树：${shot.cameraId || "未记录"}${shot.parentShotId ? ` ← ${shot.parentShotId}` : "（根镜头）"} · 原子动作：${shot.atomicAction || shot.action}\n\n时长判断：${shot.timingReason || "固定镜长"}\n\n场景：${shot.sceneId} · 角色：${shot.characterIds.join("、") || "空镜"} · 景别：${shot.framing}\n\n人物区域：${shot.characterLayout?.map(item => `${item.characterId}=${item.screenRegion}`).join("、") || "空镜"}\n\n开始状态：${shot.startState || "未单独记录"}\n\n结束状态：${shot.endState || "未单独记录"}\n\n衔接说明：${shot.continuity || (index === 0 ? "全片开场" : "按剧本承接")}\n\n${shot.action}\n\n对白：${shot.dialogue}\n\n生图提示词：${shot.imagePrompt}\n\n视频提示词：${shot.videoPrompt}`).join("\n\n"));
   for (const [kind, stage, title] of [["asset", "assets", "人物与场景资产"], ["image", "images", "分镜图"], ["video", "videos", "镜头视频"], ["export", "export", "最终视频"]] as const) {
     const tasks = state.tasks.filter(task => task.kind === kind);
-    if (tasks.length && tasks.every(task => task.status === "completed")) await publishCanvas(cwd, state, stage, title, tasks.map(task => `## ${task.label}\n\n${task.prompt || "按镜头顺序合成"}\n\n参考任务：${task.references?.join("、") || "无"}\n\n${task.files?.map(file => `素材：${file.path}`).join("\n") || ""}`).join("\n\n"), tasks);
+    if (tasks.length && tasks.every(task => task.status === "completed")) await publishCanvas(cwd, state, stage, title, tasks.map(task => `## ${task.label}\n\n${task.prompt || "按镜头顺序合成"}\n\n参考任务：${task.references?.join("、") || "无"}\n\n关键帧/视频首帧：${task.referenceFrame || "未生成"}\n\n${task.files?.map(file => `素材：${file.path}`).join("\n") || ""}`).join("\n\n"), tasks);
   }
 }
 
@@ -1027,17 +1028,14 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
     const videoShot = task.kind === "video" && state.plan
       ? state.plan.shots.find(shot => task.id === `video:${shot.id}`)
       : undefined;
-    const identityRecovery = Boolean(videoShot && ((task.qaAttempts ?? 0) > 0 || videoShot.storyBeat === "aftermath" && (task.attempts ?? 0) > 1));
-    const contentRecovery = Boolean(videoShot && (task.contentQaAttempts ?? 0) > 0);
+    // A retry must preserve the original shot contract. Replacing it with a
+    // generic face-recovery prompt makes the model forget the story beat,
+    // clothing state, phone state and intended end keyframe. Identity
+    // corrections are already appended by the QA branch, so the exact
+    // narrative/action prompt remains authoritative for every retry.
     const effectivePrompt = imageShot
       ? buildImagePrompt(state.plan!, imageShot, state.config, task.references ?? [])
-      : videoShot && contentRecovery
-        ? task.prompt!
-      : videoShot && identityRecovery
-        // A face-QA retry should simplify the shot contract instead of stacking
-        // another large identity block on an already complex motion prompt.
-        ? buildFaceRetryVideoPrompt(state.plan!, videoShot, state.config, task.qaAttempts ?? 1)
-        : task.prompt!;
+      : task.prompt!;
     if (videoShot) task.prompt = effectivePrompt;
     if (imageShot) task.prompt = effectivePrompt;
     const request: MediaGenerationRequest = {
@@ -1062,43 +1060,20 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
       const additionalReferenceLimit = videoImageReferenceLimit(mediaModel);
       let referenceMedia = references[0];
       let additionalReferences = references.slice(1, additionalReferenceLimit + 1);
-      // Narrative shots inherit the exact prior tail. Explicit body-action
-      // shots instead start from their own storyboard keyframe: forcing a
-      // clothed prior tail makes a 6-second shot spend its whole budget
-      // undressing and leaves no time for the contracted action. Character and
-      // scene references plus start/end-state prompts still carry continuity.
-      if (config.continuousShots && videoShot && !shotContainsExplicitAdultAction(videoShot)) {
+      // Every same-scene shot inherits the exact accepted tail. The storyboard
+      // must place any undressing/position transition in the previous shot's
+      // endState; bypassing the tail for an explicit shot creates a new visual
+      // world and is the main source of clothing, face and room discontinuity.
+      if (config.continuousShots && videoShot) {
         const previousTask = previousVideoTask(state, task);
         if (previousTask) {
           const previous = previousTask.files?.[0] ?? fail("同场上一镜视频尚未完成，无法建立连续首帧");
           const continuityFrame = await extractLastFrame(cwd, state, previous, task.id.slice("video:".length));
           referenceMedia = continuityFrame;
-          if (identityRecovery && videoShot?.storyBeat === "aftermath" && (task.attempts ?? 0) >= 5) {
-            const setupShot = state.plan?.shots.find(item => item.storyBeat === "setup");
-            const setupImageIndex = setupShot ? task.references?.findIndex(id => id === `image:${setupShot.id}`) ?? -1 : -1;
-            // Some providers reject an explicit/partly undressed continuity
-            // tail before they evaluate the clothed aftermath prompt. After
-            // repeated transport failures, reuse the already-approved two-face
-            // setup keyframe. Character masters and the scene anchor still
-            // lock identity and environment; the prompt treats it as the
-            // clothed moment immediately following the prior scene.
-            if (setupImageIndex >= 0) referenceMedia = references[setupImageIndex] ?? continuityFrame;
-          }
-          if ((task.qaAttempts ?? 0) > 0) {
-            const shotIndex = state.plan?.shots.findIndex(item => item.id === shotId) ?? -1;
-            const nextShot = shotIndex >= 0 ? state.plan?.shots[shotIndex + 1] : undefined;
-            const nextImageIndex = nextShot ? task.references?.findIndex(id => id === `image:${nextShot.id}`) ?? -1 : -1;
-            // The next keyframe represents this shot's intended end state and
-            // often has a clearer two-face composition than an action detail.
-            if (nextImageIndex >= 0) referenceMedia = references[nextImageIndex] ?? continuityFrame;
-          }
-          additionalReferences = identityRecovery
-            // The current storyboard may be a body-detail composition with no
-            // useful face. On identity retries keep only the two character
-            // masters and the scene anchor after the real continuity frame.
-            ? references.slice(1, Math.min(4, additionalReferenceLimit + 1))
-            : references.slice(0, additionalReferenceLimit);
-          if (identityRecovery && videoShot?.storyBeat === "aftermath" && (task.attempts ?? 0) >= 5) additionalReferences = [];
+          // Keep the two character anchors and the scene anchor first; the
+          // current storyboard keyframe is supplemental, never a replacement
+          // for the real previous tail.
+          additionalReferences = [...references.slice(1), references[0]!].slice(0, additionalReferenceLimit);
         }
       }
       if (referenceMedia) {
@@ -1121,6 +1096,7 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
     if (!needsAdultImageQa(state, task)) {
       try {
         task.files = await generateMedia(cwd, task.kind === "video" ? "video" : "image", request, AbortSignal.timeout(30 * 60 * 1000));
+        if (task.kind === "image" && task.files[0]) task.referenceFrame = task.files[0].path;
       } catch (error) {
         const message = failureMessage(error);
         // Some white-list video gateways reject a continuity tail as a possible
