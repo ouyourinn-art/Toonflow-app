@@ -6,6 +6,17 @@ export type StoryBeat = NonNullable<Shot["storyBeat"]>;
 
 const regionNames = { leftThird: "竖屏左侧三分区", centerThird: "竖屏中央三分区", rightThird: "竖屏右侧三分区" } as const;
 
+const transitionPatterns = [
+  /走到|走向|坐下|起身|躺下|跪下|站起|跨坐|翻身|转身|换位|换姿势/g,
+  /脱衣|脱下|褪下|解开|穿上/g,
+  /拿起|取出|放下|戴上|摘下/g,
+];
+
+export function atomicActionViolations(shot: Shot) {
+  const transitions = [...new Set(transitionPatterns.flatMap(pattern => shot.action.match(pattern) ?? []))];
+  return transitions.length > 2 ? [`包含 ${transitions.length} 个状态转移（${transitions.join("、")}），单镜最多允许 1 个主要动作和 1 个状态转移`] : [];
+}
+
 export const adultDirection = "所有角色均为明确 25 岁以上的原创虚构成年人，清醒、知情且自愿。先建立人物关系、欲望、明确同意和因果，再逐步进入裸体、前戏与双方自愿的性行为；不得把完整故事退化成无剧情的动作循环。明确成人动作镜直接、具体、生动地呈现指定行为与情绪，不以亲吻、拥抱、远景或镜外暗示替代。禁止未成年人或年龄模糊者、强迫、迷奸、昏迷、偷窥、乱伦、暴力、非人动物和真实人物仿造。";
 export const adultAnatomyDirection = "真实人体解剖硬约束：阴茎必须从男性耻骨区自然延伸，根部、阴茎体、冠状沟和龟头比例连续真实；根部至龟头的物理长度与粗细在同一镜头内始终固定，可见长度只能因为口腔、外阴或阴道的真实遮挡而改变，器官本身不得伸长、缩短、膨胀或收缩。女性阴阜、外阴唇与阴道口位置和层次符合成年人体结构。插入点只能位于阴道口，阴茎轴线、女性骨盆角度和进入方向必须一致，并保留真实的皮肤接触阴影、轻微压痕与组织连续性。允许按创作需求呈现明显大于平均但仍符合成年人体比例的阴茎；严格禁止假阳具或塑料质感、橡胶管状阴茎、望远镜式伸缩、阴茎悬浮或脱离身体、阴茎从大腿或腹部错误长出、插入大腿或臀部、错误孔位、器官融合、重复生殖器、解剖学不可能的夸张尺寸、穿模、肢体黏连和人体蜡像感。";
 export const adultMotionDirection = "成人动作运动学硬约束：口交或性交的往复必须来自人物头部、躯干或骨盆整体沿固定轴线移动，阴茎根部与男性骨盆保持刚性连接，根部至龟头距离逐帧不变。后撤时因为口腔或阴道遮挡减少而露出更多同一根阴茎，推进时因为真实进入而遮挡增加；不得让阴茎自身像活塞、橡胶管或望远镜一样伸缩，不得用镜头变焦、画面缩放、身体漂移或局部形变冒充抽插。";
@@ -127,14 +138,30 @@ export function buildAssetPrompt(asset: Asset, config: OriginalConfig) {
   const style = config.style ? `\n统一风格：${config.style}` : "";
   if (asset.kind === "scene") return `${asset.imagePrompt}\n固定场景：${asset.description}${style}\n${ratioInstruction(config)}\n独立场景锚点图，清晰展示固定空间、材质、道具位置和光线，不出现人物、人体、倒影人物、照片人物、文字或拼贴。`;
   const adult = config.adultExplicit ? "\n角色明确 25 岁以上，裸体全身身份基准，脸部、身体比例及生殖器清晰可见且无遮挡，不摆出性行为姿势。" : "";
-  return `${asset.imagePrompt}\n不可变身份指纹：${asset.description}${style}\n角色资产固定使用 16:9 横屏三视图角色设定板。同一个 ${asset.id} / ${asset.name} 在一张图中从左到右依次展示：正面完整全身、左侧三分之四完整全身、纯侧面完整全身。三个视图必须是同一人物、同一年龄、同一脸型五官、同一发型发色、同一肤色体型、同一身体比例、同一服装状态和同一唯一标记；中性站姿、中性表情、均匀柔光、纯净背景，头脚完整不裁切。${adult}\n这是一张人物设定板，不是三个角色；禁止身份漂移、不同脸、不同体型、不同服装、额外第四视图、其他人物、镜中人、文字、水印和装饰边框。`;
+  return `${asset.imagePrompt}\n不可变身份指纹：${asset.description}${style}\n角色身份母版固定为单人、单视图、竖屏完整全身像：${asset.id} / ${asset.name} 正面自然站立，正脸清楚，头脚完整，身体比例、服装状态和唯一标记可辨；中性表情、均匀柔光、纯净背景。${adult}\n只允许出现同一名角色一次。禁止三视图、九宫格、拼贴、分屏、重复人物、镜中人、不同脸、不同体型、不同服装、文字、水印和装饰边框。`;
+}
+
+export function characterIdentityTaskId(characterId: string) {
+  return `assetVariant:${characterId}:face`;
+}
+
+function buildFaceVariantPrompt(asset: Asset, config: OriginalConfig) {
+  const style = config.style ? `\n统一风格：${config.style}` : "";
+  return `以提供的单人全身身份母版为唯一父图，派生 ${asset.id} / ${asset.name} 的单人正脸近景身份锚点。严格继承同一脸型、五官比例、眼距、鼻形、唇形、发际线、发型发色、肤色、年龄感和唯一标记，不重新设计人物。头部与肩部居中，正视镜头，中性表情，均匀柔光，纯净背景，脸部无遮挡、清晰对焦。${style}\n只允许出现同一名角色一次；禁止换脸、美化成另一人、年龄变化、发型变化、拼贴、三视图、分屏、额外人物、文字和水印。`;
 }
 
 export function buildAssetTasks(plan: OriginalPlan, config: OriginalConfig): OriginalTask[] {
-  return plan.assets.map<OriginalTask>(asset => ({
-      id: `asset:${asset.id}`, kind: "asset", label: `${asset.kind === "character" ? "角色" : "场景"}：${asset.name}`, status: "pending",
+  return plan.assets.flatMap<OriginalTask>(asset => {
+    const canonical: OriginalTask = {
+      id: `asset:${asset.id}`, kind: "asset", label: `${asset.kind === "character" ? "角色身份母版" : "场景锚点"}：${asset.name}`, status: "pending",
       sceneId: asset.kind === "scene" ? asset.id : undefined, prompt: buildAssetPrompt(asset, config),
-  }));
+    };
+    if (asset.kind === "scene") return [canonical];
+    return [canonical, {
+      id: characterIdentityTaskId(asset.id), kind: "asset", label: `角色正脸锚点：${asset.name}`, status: "pending",
+      prompt: buildFaceVariantPrompt(asset, config), references: [canonical.id],
+    }];
+  });
 }
 
 export function buildImagePrompt(plan: OriginalPlan, shot: Shot, config: OriginalConfig, references: string[]) {
@@ -145,6 +172,11 @@ export function buildImagePrompt(plan: OriginalPlan, shot: Shot, config: Origina
     ? "\n成人动作首帧硬约束：本图从本镜成人动作的解剖正确起点开始，以双方骨盆与接触轴线为主体；允许呈现进入前的准确对准、自然接触或浅插入，不强迫静态图制造深度交合。构图纳入男性下腹、耻骨与阴茎根部，以及女性骨盆、阴阜、外阴和唯一阴道口，必须能确认每个器官属于正确身体、轴线一致、没有悬浮、融合、重复器官或错误孔位。手部和衣物不得遮挡关键来源与接触区域。真正的进入与连续往复由后续视频动作合同完成，并由视频内容 QA 验证；人物身份仍以人物母版锁定。若下方‘本镜第一帧’文字要求不可能的深度插入，以本硬约束的解剖正确起点为准。"
     : "";
   const referenceLines = references.map((id, index) => {
+    if (id.startsWith("assetVariant:")) {
+      const assetId = id.split(":")[1]!;
+      const asset = plan.assets.find(item => item.id === assetId && item.kind === "character");
+      return `参考图 ${index + 1} = ${asset?.id ?? assetId} / ${asset?.name ?? assetId} 的正脸身份锚点，只锁定该角色身份，不复制成额外人物`;
+    }
     if (id.startsWith("asset:")) {
       const assetId = id.slice("asset:".length);
       const asset = plan.assets.find(item => item.id === assetId);
@@ -171,31 +203,24 @@ export function imageReferenceLimit(config: OriginalConfig) {
 
 export function imageReferenceIds(plan: OriginalPlan, shot: Shot, limit: number) {
   const shotIndex = plan.shots.indexOf(shot);
-  const previousKeyframes = plan.shots
+  const previousKeyframe = plan.shots
     .slice(0, shotIndex)
     .filter(item => item.sceneId === shot.sceneId)
     .reverse()
-    .map(item => `image:${item.id}`);
+    .map(item => `image:${item.id}`)[0];
   return [...new Set([
-    ...shot.characterIds.map(id => `asset:${id}`),
+    ...shot.characterIds.map(characterIdentityTaskId),
     `asset:${shot.sceneId}`,
-    ...previousKeyframes,
+    ...(previousKeyframe ? [previousKeyframe] : []),
   ])].slice(0, limit);
 }
 
 export function videoReferenceIds(plan: OriginalPlan, shot: Shot) {
-  const shotIndex = plan.shots.indexOf(shot);
-  const neighbors = plan.shots
-    .map((item, index) => ({ item, index }))
-    .filter(({ item }) => item !== shot && item.sceneId === shot.sceneId)
-    .sort((left, right) => Math.abs(left.index - shotIndex) - Math.abs(right.index - shotIndex) || left.index - right.index)
-    .map(({ item }) => `image:${item.id}`);
   return [...new Set([
     `image:${shot.id}`,
-    ...shot.characterIds.map(id => `asset:${id}`),
+    ...shot.characterIds.map(characterIdentityTaskId),
     `asset:${shot.sceneId}`,
-    ...neighbors,
-  ])].slice(0, 10);
+  ])];
 }
 
 export function buildVideoPrompt(plan: OriginalPlan, shot: Shot, config: OriginalConfig) {
@@ -208,7 +233,8 @@ export function buildVideoPrompt(plan: OriginalPlan, shot: Shot, config: Origina
   return `镜头合同：本段严格 ${duration} 秒，对应全片绝对时间 ${shot.startSecond}-${shot.endSecond} 秒；storyBeat=${shot.storyBeat}；镜头目的=${shot.shotPurpose}；景别与运镜=${shot.framing}。
 ${ratioInstruction(config)}
 ${exactCastBlock(plan, shot)}
-多参考绑定：首帧负责本镜动作起点和连续状态；当前分镜图负责构图、景别与目标动作；人物母版分别锁定各角色的脸、发型、肤色、体型、身体比例和唯一标记；场景锚点锁定空间布局、道具和光线。发生冲突时，人物身份以人物母版为准，动作起点以真实上一镜尾帧为准，构图以当前分镜图为准。禁止把多张人物参考融合成新人、交换身份或复制出额外角色。
+参考预算绑定：首帧只负责本镜动作起点和连续状态；每名角色只使用一张正脸身份锚点；场景只使用一张空间锚点。发生冲突时，人物身份以正脸锚点为准，动作起点以真实上一镜尾帧或当前分镜图为准，场景锚点只约束空间布局、道具和光线。禁止把多张参考融合成新人、交换身份或复制出额外角色。
+原子动作：${shot.atomicAction || shot.action}
 动作与声音：${shot.videoPrompt}
 具体动作：${shot.action}
 对白：${shot.dialogue || "无对白"}

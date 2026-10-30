@@ -74,18 +74,21 @@
             <el-form-item label="视频分辨率">
               <el-select v-model="form.resolution" :disabled="!resolutions.length"><el-option v-for="resolution in resolutions" :key="resolution" :value="resolution" :label="resolution" /></el-select>
             </el-form-item>
+            <el-form-item label="质量档">
+              <el-radio-group v-model="form.qualityTier"><el-radio-button value="draft">预览优先 720p</el-radio-button><el-radio-button value="final">成片优先 1080p</el-radio-button></el-radio-group>
+            </el-form-item>
             <el-form-item label="最终合成"><el-switch v-model="form.stitch" activeText="按镜头顺序自动合成 MP4" /></el-form-item>
           </div>
         </el-form>
         <p v-if="form.adultExplicit" class="adultNotice">成人模式仅构建 25 岁以上、原创虚构、清醒且自愿的角色。资产图、分镜图和视频强制使用 Shugando 开白模型，不允许回落到普通媒体模型；明确成人镜头还会抽取 12 帧执行动作、可见性、运动、解剖和剧情匹配 QA，未通过时只重制失败镜头。</p>
-        <p class="runSummary">需求和视觉风格都可以直接修改。已有运行记录时，先点击「编辑需求与风格并新建一版」；修改只作用于新版本，旧剧本、素材和成片不会被覆盖。参考架构采用“一人一张三视图角色板 + 一场景一张环境板 + 连续关键帧链”：分镜图优先参考本镜人物、环境和同场既有关键帧；视频以当前分镜或真实上一镜尾帧作为首帧，再用人物板、环境板和前后相邻关键帧填充最多 9 张图片参考。不会重复同一张图凑数。锁脸仍是参考图约束、多人区域绑定与 YuNet + SFace 后验重试，并非上游底层 FaceID / PuLID 硬锁。</p>
+        <p class="runSummary">需求和视觉风格都可以直接修改。已有运行记录时，先点击「编辑需求与风格并新建一版」；修改只作用于新版本，旧剧本、素材和成片不会被覆盖。参考架构采用“单人全身身份母版 → 从母版派生正脸锚点 → 场景锚点 → 原子分镜关键帧”：不再把三视图拼贴送入视频模型。每镜只使用真实起始帧、每名角色一张正脸锚点和必要场景锚点，避免参考过载造成多人、融合脸和身份污染。锁脸仍是参考图约束、多人区域绑定与 YuNet + SFace 后验重试，并非上游底层 FaceID / PuLID 硬锁。</p>
         <div class="modelHelp">
           <span>语言、图片与视频分别调用所选供应商；语言 Key 不会自动用于媒体服务。</span>
           <el-button text :loading="loadingModels" @click="loadModels">刷新模型列表</el-button>
           <el-button text @click="openSettings">配置模型</el-button>
         </div>
         <p v-if="planningValidationError || (!planningOnlyReady && (modelError || validationError))" class="errorText" role="alert">{{ planningValidationError || modelError || validationError }}</p>
-        <p class="costNotice">目标 {{ form.shotCount * form.duration }} 秒<template v-if="form.productionMode === 'short' && form.adultExplicit">，各镜按剧情容量自动分配 4-15 秒且总长不变</template>{{ form.stitch ? '，合成后逐镜校准到导演时长' : '' }}；图片至少 {{ form.characterCount + form.sceneCount + form.shotCount }} 张（每个角色仅 1 张三视图资产）；视频首轮 {{ form.shotCount }} 段；图片并发 {{ form.imageConcurrency }}，视频并发 {{ form.videoConcurrency }}。<template v-if="form.productionMode === 'long'">首轮估算 {{ firstPassCost }} USD，全部重试上限估算 {{ retryCost }} USD，实际提交受 {{ form.costLimit || '不限' }} USD 预算约束。</template> 生成按供应商实际规则计费。</p>
+        <p class="costNotice">目标 {{ form.shotCount * form.duration }} 秒<template v-if="form.productionMode === 'short' && form.adultExplicit">，各镜按剧情容量自动分配 4-15 秒且总长不变</template>{{ form.stitch ? '，合成后逐镜校准到导演时长' : '' }}；图片至少 {{ form.characterCount * 2 + form.sceneCount + form.shotCount }} 张（每名角色 1 张全身母版 + 1 张派生正脸锚点）；视频首轮 {{ form.shotCount }} 段；图片并发 {{ form.imageConcurrency }}，视频并发 {{ form.videoConcurrency }}。<template v-if="form.productionMode === 'long'">首轮估算 {{ firstPassCost }} USD，全部重试上限估算 {{ retryCost }} USD，实际提交受 {{ form.costLimit || '不限' }} USD 预算约束。</template> 生成按供应商实际规则计费。</p>
         <div class="actions">
           <el-button v-if="newVersion" :disabled="busy" @click="newVersion = false">返回当前进度</el-button>
           <el-button size="large" :loading="busy" :disabled="!canStartPlanning" @click="startProduction(true)">只生成剧本与分镜 JSON</el-button>
@@ -177,7 +180,7 @@ type ProductionForm = Omit<OriginalConfig, "language" | "image" | "video">;
 const form = reactive<ProductionForm>({
   productionMode: "short", brief: props.brief, style: "电影写实", characterCount: 3, shotCount: 6,
   targetDurationMinutes: 10, sceneCount: 1, maxRetries: 0, costLimit: 0, costPerVideo: 2.01,
-  faceQaEnabled: false, faceThreshold: 0.363, ratio: "9:16", duration: 15, resolution: "", stitch: true,
+  faceQaEnabled: false, faceThreshold: 0.363, ratio: "9:16", duration: 15, resolution: "", qualityTier: "draft", stitch: true,
   adultExplicit: false, characterLock: true, continuousShots: false, planningOnly: false, imageConcurrency: 6, videoConcurrency: 4,
 });
 const statusLabels = { running: "进行中", pausing: "等待暂停", paused: "已暂停", failed: "执行失败", completed: "已完成", interrupted: "服务中断，待恢复" };
@@ -325,7 +328,7 @@ function applyAdult60Preset() {
     characterCount: 2, shotCount: 12, ratio: "9:16", duration: 5, stitch: true,
     targetDurationMinutes: 10, sceneCount: 1, maxRetries: 2, costLimit: 0, costPerVideo: 2.01,
     faceQaEnabled: true, faceThreshold: 0.363, adultExplicit: true, characterLock: true, continuousShots: true,
-    imageConcurrency: 6, videoConcurrency: 4,
+    qualityTier: "draft", imageConcurrency: 6, videoConcurrency: 4,
   } satisfies Partial<ProductionForm>);
   selectAdultModels();
 }
@@ -336,7 +339,8 @@ function selectAdultModels() {
   if (video) {
     videoValue.value = modelValue(video);
     const choices = video.durationResolutionMap?.filter(item => item.duration.includes(form.duration)).flatMap(item => item.resolution) ?? [];
-    form.resolution = choices.includes("480p") ? "480p" : choices[0] ?? "";
+    const preferred = form.qualityTier === "final" ? "1080p" : "720p";
+    form.resolution = choices.includes(preferred) ? preferred : choices.includes("720p") ? "720p" : choices[0] ?? "";
   }
   const image = imageModels.value.find(model => model.modelId.trim().toLowerCase() === "dola-seedream-5.0-pro-white")
     ?? imageModels.value.find(model => model.modelId.trim().toLowerCase() === "seedream-5.0-white")
@@ -351,7 +355,7 @@ function applyAdultLongPreset() {
     characterCount: 3, shotCount: 40, targetDurationMinutes: 10, sceneCount: 8,
     ratio: "9:16", duration: 15, stitch: true, maxRetries: 2, costLimit: 150, costPerVideo: 2.01,
     faceQaEnabled: true, faceThreshold: 0.363, adultExplicit: true, characterLock: true, continuousShots: true,
-    imageConcurrency: 6, videoConcurrency: 4,
+    qualityTier: "draft", imageConcurrency: 6, videoConcurrency: 4,
   } satisfies Partial<ProductionForm>);
   selectAdultModels();
 }
@@ -450,7 +454,15 @@ watch(modelChoices, choices => {
 watch(() => form.adultExplicit, enabled => { if (enabled) selectAdultModels(); });
 watch(ratios, values => { if (!values.includes(form.ratio) && values[0]) form.ratio = values[0]; });
 watch(durations, values => { if (!values.includes(form.duration)) form.duration = values.includes(15) ? 15 : values[0] ?? 0; });
-watch(resolutions, values => { if (!values.includes(form.resolution)) form.resolution = values[0] ?? ""; });
+watch(resolutions, values => {
+  if (values.includes(form.resolution)) return;
+  const preferred = form.qualityTier === "final" ? "1080p" : "720p";
+  form.resolution = values.includes(preferred) ? preferred : values.includes("720p") ? "720p" : values[0] ?? "";
+});
+watch(() => form.qualityTier, tier => {
+  const preferred = tier === "final" ? "1080p" : "720p";
+  if (resolutions.value.includes(preferred)) form.resolution = preferred;
+});
 watch([selectedVideo, () => form.ratio, () => form.duration, () => form.resolution], () => {
   videoPrice.value = null;
   priceError.value = "";

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { longBibleSchema, longScenePlanSchema, type LongBible, type LongScenePlan } from "./longTypes";
 import { originalPlanSchema, type OriginalConfig, type OriginalPlan, type OriginalTask } from "./types";
-import { adultDirection, buildAssetTasks, buildImagePrompt, buildVideoPrompt, contentQaApplicable, explicitStartShot, faceQaApplicable, imageReferenceIds, imageReferenceLimit, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds, type StoryBeat } from "./prompt";
+import { adultDirection, atomicActionViolations, buildAssetTasks, buildImagePrompt, buildVideoPrompt, characterIdentityTaskId, contentQaApplicable, explicitStartShot, faceQaApplicable, imageReferenceIds, imageReferenceLimit, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds, type StoryBeat } from "./prompt";
 import { adultStoryLibraryInstruction } from "./adultStoryLibrary";
 
 export function shotAllocation(shotCount: number, sceneCount: number) {
@@ -43,7 +43,7 @@ export function buildLongScenePrompt(config: OriginalConfig, bible: LongBible, s
   const beatWindow = config.adultExplicit
     ? `本场覆盖全片第 ${startShot + 1}-${endShot + 1} 镜；explicitAction 的全片固定起点是第 ${explicitStartShot(config) + 1} 镜，早于该镜禁止 explicitAction，到达该镜必须进入 explicitAction。上一镜 storyBeat=${previousStoryBeat || "无（全片开场）"}，本场不得回退到更早的剧情节拍。`
     : `本场覆盖全片第 ${startShot + 1}-${endShot + 1} 镜；上一镜 storyBeat=${previousStoryBeat || "无（全片开场）"}，本场不得回退到更早的剧情节拍。`;
-  return `根据全片圣经展开第 ${bible.scenes.indexOf(scene) + 1} 场的完整剧本和逐镜方案，不改动既定角色、场景数或故事弧。\n全片：${bible.title}\n全片梗概：${bible.synopsis}\n故事弧：${bible.storyArc}\n当前场景：${JSON.stringify(scene)}\n出场角色身份库：${JSON.stringify(characters)}\n上一场最终状态：${previousEndState || "全片开场"}\n${beatWindow}\n视觉风格：${config.style || "电影写实"}\n${config.adultExplicit ? adultDirection : "内容强度严格跟随创作需求。"}\n${storyArcInstruction(config)}\n${timingInstruction(config, startShot)}\n必须生成恰好 ${scene.shotCount} 镜，每镜 ${config.duration} 秒。所有 shot.sceneId 必须为 ${scene.id}；shot.id 全片唯一，建议以 ${scene.id}Shot 开头。每镜最多 3 个角色，只能引用当前场景出场角色。每镜必须填写 storyBeat、shotPurpose、framing 和 characterLayout；characterLayout 必须与 characterIds 完全相同且每人绑定不同的 leftThird / centerThird / rightThird 竖屏区域，明确位置、姿势、朝向和视线。第 1 镜 startState 精确继承上一场最终状态或当前场景入场状态；之后每镜 startState 精确继承前一镜 endState。continuity 明确动作、位置、视线、服装、道具、光线、情绪和因果接续。imagePrompt 描述第一帧静态构图；videoPrompt 按本镜 0-${config.duration} 秒描述从 startState 到 endState 的连续动作、运镜、节奏和声音。对白只写入 dialogue。最后一镜 endState 必须达到场景既定离场状态。不得添加新角色、字幕、拼贴或画外人物。\n只输出符合下列 JSON Schema 的一个 JSON 对象，不加代码围栏或解释：\n${JSON.stringify(z.toJSONSchema(longScenePlanSchema))}`;
+  return `根据全片圣经展开第 ${bible.scenes.indexOf(scene) + 1} 场的完整剧本和逐镜方案，不改动既定角色、场景数或故事弧。\n全片：${bible.title}\n全片梗概：${bible.synopsis}\n故事弧：${bible.storyArc}\n当前场景：${JSON.stringify(scene)}\n出场角色身份库：${JSON.stringify(characters)}\n上一场最终状态：${previousEndState || "全片开场"}\n${beatWindow}\n视觉风格：${config.style || "电影写实"}\n${config.adultExplicit ? adultDirection : "内容强度严格跟随创作需求。"}\n${storyArcInstruction(config)}\n${timingInstruction(config, startShot)}\n必须生成恰好 ${scene.shotCount} 镜，每镜 ${config.duration} 秒。所有 shot.sceneId 必须为 ${scene.id}；shot.id 全片唯一，建议以 ${scene.id}Shot 开头。每镜最多 3 个角色，只能引用当前场景出场角色。每镜必须填写 storyBeat、shotPurpose、framing、characterLayout、cameraId 和 atomicAction；atomicAction 只允许一个主要动作，最多再带一个位置、服装或道具状态转移，超过就拆镜。cameraId 标识可共享轴线的机位，parentShotId 只引用同机位此前已存在的镜头。characterLayout 必须与 characterIds 完全相同且每人绑定不同的 leftThird / centerThird / rightThird 竖屏区域，明确位置、姿势、朝向和视线。第 1 镜 startState 精确继承上一场最终状态或当前场景入场状态；之后每镜 startState 精确继承前一镜 endState。continuity 明确动作、位置、视线、服装、道具、光线、情绪和因果接续。imagePrompt 描述第一帧静态构图；videoPrompt 按本镜 0-${config.duration} 秒描述从 startState 到 endState 的连续动作、运镜、节奏和声音。对白只写入 dialogue。最后一镜 endState 必须达到场景既定离场状态。不得添加新角色、字幕、拼贴或画外人物。\n只输出符合下列 JSON Schema 的一个 JSON 对象，不加代码围栏或解释：\n${JSON.stringify(z.toJSONSchema(longScenePlanSchema))}`;
 }
 
 export function validateLongScene(plan: LongScenePlan, bible: LongBible, scene: LongBible["scenes"][number], usedShotIds: Set<string>, config: OriginalConfig, previousStoryBeat?: StoryBeat) {
@@ -59,6 +59,9 @@ export function validateLongScene(plan: LongScenePlan, bible: LongBible, scene: 
     if (shot.sceneId !== scene.id || new Set(shot.characterIds).size !== shot.characterIds.length || shot.characterIds.some(id => !characters.has(id))) throw new Error(`分镜 ${shot.id} 的角色或场景引用无效`);
     if (shot.startSecond !== (startShot + index) * config.duration || shot.endSecond !== shot.startSecond + config.duration) throw new Error(`分镜 ${shot.id} 的时间轴未锁定为 ${config.duration} 秒`);
     if (!shot.storyBeat || !shot.shotPurpose || !shot.framing) throw new Error(`分镜 ${shot.id} 缺少剧情节拍、镜头目的或景别`);
+    if (!shot.cameraId || !shot.atomicAction) throw new Error(`分镜 ${shot.id} 缺少机位树或原子动作合同`);
+    const atomicViolations = atomicActionViolations(shot);
+    if (atomicViolations.length) throw new Error(`分镜 ${shot.id} 不是原子镜头：${atomicViolations.join("；")}`);
     const currentBeat = beatOrder.indexOf(shot.storyBeat);
     if (currentBeat < 0 || currentBeat < previousBeat) throw new Error(`分镜 ${shot.id} 的剧情节拍倒退；必须按 ${beatOrder.join(" → ")} 推进`);
     previousBeat = currentBeat;
@@ -101,7 +104,7 @@ export function buildLongMediaTasks(plan: OriginalPlan, config: OriginalConfig):
       });
       if (config.faceQaEnabled && shot.characterIds.length && faceQaApplicable(shot)) tasks.push({
         id: `qa:${shot.id}`, kind: "qa", label: `人物一致性质检：${shot.title}`, status: "pending", sceneId: shot.sceneId,
-        references: [`video:${shot.id}`, ...shot.characterIds.map(id => `asset:${id}`)],
+        references: [`video:${shot.id}`, ...shot.characterIds.map(characterIdentityTaskId)],
       });
       if (config.adultExplicit && contentQaApplicable(shot)) {
         const faceQaId = config.faceQaEnabled && shot.characterIds.length && faceQaApplicable(shot) ? `qa:${shot.id}` : undefined;

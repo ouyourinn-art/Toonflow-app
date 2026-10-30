@@ -11,7 +11,7 @@ import { lockWorkspaceFiles, resolveWorkspacePath, writeWorkspaceFile } from "@/
 import { inspectVideoFaces, prepareFaceQa } from "./faceQa";
 import { buildLongBiblePrompt, buildLongMediaTasks, buildLongScenePrompt, composeLongPlan, validateLongBible, validateLongScene } from "./longProduction";
 import { longBibleSchema, longScenePlanSchema, type LongScenePlan } from "./longTypes";
-import { adultDirection, buildAssetTasks, buildContentCorrectionPrompt, buildFaceCorrectionPrompt, buildFaceRetryVideoPrompt, buildImagePrompt, buildVideoPrompt, contentQaApplicable, faceQaApplicable, imageReferenceIds, imageReferenceLimit, screenplayInstruction, shortShotDurations, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds } from "./prompt";
+import { adultDirection, atomicActionViolations, buildAssetTasks, buildContentCorrectionPrompt, buildFaceCorrectionPrompt, buildFaceRetryVideoPrompt, buildImagePrompt, buildVideoPrompt, characterIdentityTaskId, contentQaApplicable, faceQaApplicable, imageReferenceIds, imageReferenceLimit, screenplayInstruction, shortShotDurations, storyArcInstruction, storyBeatOrder, timingInstruction, videoReferenceIds } from "./prompt";
 import { originalPlanSchema, originalRunSchema, type OriginalConfig, type OriginalPlan, type OriginalRun, type OriginalTask } from "./types";
 import { adultStoryLibraryInstruction, adultStoryLibrarySnapshot } from "./adultStoryLibrary";
 
@@ -153,6 +153,18 @@ async function preflight(config: OriginalConfig) {
   return { image, video };
 }
 
+function normalizeShotContracts(plan: OriginalPlan) {
+  const sceneCameraIds = new Map<string, string>();
+  for (const [index, shot] of plan.shots.entries()) {
+    const cameraId = sceneCameraIds.get(shot.sceneId) ?? `camera${sceneCameraIds.size + 1}`;
+    sceneCameraIds.set(shot.sceneId, cameraId);
+    shot.cameraId ||= cameraId;
+    shot.atomicAction ||= shot.shotPurpose || shot.action.split(/[。；]/)[0] || shot.action;
+    const previous = plan.shots[index - 1];
+    if (!shot.parentShotId && previous?.sceneId === shot.sceneId && previous.cameraId === shot.cameraId) shot.parentShotId = previous.id;
+  }
+}
+
 function validatePlan(plan: OriginalPlan, config: OriginalConfig) {
   if (config.productionMode === "short" && config.shotCount > 1) {
     for (const section of ["作品名", "剧情母题", "人物小传", "场景目标", "阻碍", "转折/卡点", "场景结果", "本集结束点"]) {
@@ -186,6 +198,10 @@ function validatePlan(plan: OriginalPlan, config: OriginalConfig) {
     if ((config.productionMode === "long" || !config.adultExplicit) && duration !== config.duration) fail(`分镜 ${shot.id} 的时长必须固定为 ${config.duration} 秒`);
     expectedStart = shot.endSecond!;
     if (!shot.storyBeat || !shot.shotPurpose || config.productionMode === "short" && !shot.timingReason || !shot.framing) fail(`分镜 ${shot.id} 缺少剧情节拍、镜头目的、时长判断或景别`);
+    if (!shot.cameraId || !shot.atomicAction) fail(`分镜 ${shot.id} 缺少机位树或原子动作合同`);
+    const atomicViolations = atomicActionViolations(shot);
+    if (atomicViolations.length) fail(`分镜 ${shot.id} 不是原子镜头：${atomicViolations.join("；")}。请拆成多个镜头后再生成媒体。`);
+    if (shot.parentShotId && (!shotIds.has(shot.parentShotId) || shot.parentShotId === shot.id)) fail(`分镜 ${shot.id} 的父镜头必须引用此前已出现的镜头`);
     const layout = shot.characterLayout ?? fail(`分镜 ${shot.id} 缺少人物区域`);
     const layoutIds = layout.map(item => item.characterId);
     if (layoutIds.length !== shot.characterIds.length || new Set(layoutIds).size !== layoutIds.length || layoutIds.some(id => !shot.characterIds.includes(id)) || new Set(layout.map(item => item.screenRegion)).size !== layout.length) fail(`分镜 ${shot.id} 的人物区域未与实际出场角色一一绑定`);
@@ -306,7 +322,7 @@ function buildShortMediaTasks(plan: OriginalPlan, config: OriginalConfig): Origi
   })));
   if (config.faceQaEnabled) tasks.push(...plan.shots.filter(shot => shot.characterIds.length && faceQaApplicable(shot)).map<OriginalTask>(shot => ({
     id: `qa:${shot.id}`, kind: "qa", label: `人物一致性质检：${shot.title}`, status: "pending", sceneId: shot.sceneId,
-    references: [`video:${shot.id}`, ...shot.characterIds.map(id => `asset:${id}`)],
+    references: [`video:${shot.id}`, ...shot.characterIds.map(characterIdentityTaskId)],
   })));
   if (config.adultExplicit) tasks.push(...plan.shots.filter(contentQaApplicable).map<OriginalTask>(shot => {
     const faceQaId = config.faceQaEnabled && shot.characterIds.length && faceQaApplicable(shot) ? `qa:${shot.id}` : undefined;
@@ -345,6 +361,7 @@ const compactAdultPlanSchema = z.strictObject({
     title: z.string().trim().min(1).max(200),
     characterIds: z.array(z.string().regex(/^[a-z][a-zA-Z0-9]{0,63}$/)).min(1).max(3),
     shotPurpose: z.string().trim().min(1).max(1500),
+    atomicAction: z.string().trim().min(1).max(1500),
     framing: z.string().trim().min(1).max(1000),
     action: z.string().trim().min(1).max(4000),
     dialogue: z.string().max(2000),
@@ -432,6 +449,8 @@ function hydrateCompactAdultPlan(value: CompactAdultPlan, config: OriginalConfig
       id: source.id, title: source.title, sceneId: value.scene.id, characterIds: source.characterIds,
       startSecond, endSecond: startSecond + duration, storyBeat,
       shotPurpose: `${source.shotPurpose}${explicit ? "；清楚完成指定成人动作，不以亲吻、拥抱、远景或镜外暗示替代" : ""}`,
+      cameraId: "camera1", parentShotId: index > 0 ? all[index - 1]!.id : undefined,
+      atomicAction: source.atomicAction,
       timingReason: `${duration} 秒容纳本镜的对白、反应与连续动作拍，并保证全片严格 ${config.shotCount * config.duration} 秒。`,
       framing: `${source.framing}${storyBeat === "explicitAction" ? "；无遮挡的生殖器与插入连接极近景特写" : ""}`,
       characterLayout,
@@ -462,8 +481,8 @@ async function planStory(cwd: string, state: OriginalRun) {
   const adult = config.adultExplicit
     ? adultDirection
     : "内容强度严格跟随用户创作需求，不自行添加露骨成人内容。";
-  const fullPrompt = `根据创作需求写出连贯完整的短片剧本与可直接制作的分镜方案。\n需求：${config.brief}\n视觉风格：${config.style || "电影写实"}\n严格锁定 ${config.characterCount} 个角色、${config.shotCount} 个镜头；目标总时长 ${config.shotCount * config.duration} 秒，画幅 ${config.ratio}。系统配置的 ${config.ratio} 是唯一有效画幅，需求文字中的冲突画幅视为旧信息并忽略。\n${adult}\n${screenplayInstruction(config)}\n${config.adultExplicit ? adultStoryLibraryInstruction(config.brief) : ""}\n${storyArcInstruction(config)}\n${timingInstruction(config)}\n${identity}\n${continuity}\n先完成剧本，再从完整剧本整理唯一角色和场景资产，最后按本子中的因果和卡点拆分镜头；同一人的称呼、衣着或姿势变化不能拆成新角色，别名统一归入同一 ID。每镜最多 3 人，必须仅引用资产表中实际出场的角色 ID 和一个场景 ID。每镜填写 storyBeat、shotPurpose、timingReason、framing 和 characterLayout；timingReason 必须根据对白字数、动作拍数量和状态变化解释 endSecond-startSecond。characterLayout 必须与 characterIds 完全相同且每人绑定不同的 leftThird / centerThird / rightThird 竖屏区域，写明位置、姿势、朝向与视线。\nassets 的 description 写固定外观和服装或场景布局，imagePrompt 写资产图构图与光照。shots 的 imagePrompt 写本镜第一帧静态构图；videoPrompt 必须按本镜实际时长（endSecond-startSecond）逐段写从 startState 到 endState 的连续动作、运镜、节奏和声音。脱衣、转身、换位、进入、退出等复杂状态变化必须完整显示或拆成独立过渡镜，不能在镜外突然完成。不要把未出场角色、拼贴、字幕或提示词文字画进图。台词只写入 dialogue。\n只输出符合下列 JSON Schema 的一个 JSON 对象，不加代码围栏或解释：\n${JSON.stringify(z.toJSONSchema(originalPlanSchema))}`;
-  const compactPrompt = `你是成人剧情短片编剧。只做剧情与镜头决策，服务器会在本地补全时间轴、资产提示词和严格连续性合同。\n创作需求：${config.brief}\n视觉风格：${config.style || "电影写实"}\n必须恰好返回 ${config.characterCount} 名原创虚构、明确30岁以上、清醒知情且自愿的成年人，以及 ${config.shotCount} 个连续镜头、一个固定场景。人物描述必须包含不可变脸型、五官、发型发色、肤色、身高体型、身体比例和唯一标记。剧情采用 setup → consent → explicitAction → escalation → climax → aftermath：开头快速建立秘密、风险和主动选择；前8秒内完成明确同意并进入首次成人动作；中段升级；结尾必须有关系决定。动作镜要明确写出真实性交、插入关系、无遮挡生殖器细节、由人物骨盆整体运动产生的往复以及正确人体连接，不能只写亲吻、拥抱、躺床或镜外暗示；禁止器官自身伸缩、悬浮、错误孔位、重复器官、融合与穿模。严格只有指定角色，不出现第三人。每个 shot 的 startState/endState 都写人物位置、朝向、姿势、衣物状态、手脚、手机、床铺与光线；动作和台词要有因果，不能是同一画面的同义重复。\n${adultStoryLibraryInstruction(config.brief)}\n只输出一个精炼 JSON 对象，不加代码围栏或解释：\n${JSON.stringify(z.toJSONSchema(compactAdultPlanSchema))}`;
+  const fullPrompt = `根据创作需求写出连贯完整的短片剧本与可直接制作的分镜方案。\n需求：${config.brief}\n视觉风格：${config.style || "电影写实"}\n严格锁定 ${config.characterCount} 个角色、${config.shotCount} 个镜头；目标总时长 ${config.shotCount * config.duration} 秒，画幅 ${config.ratio}。系统配置的 ${config.ratio} 是唯一有效画幅，需求文字中的冲突画幅视为旧信息并忽略。\n${adult}\n${screenplayInstruction(config)}\n${config.adultExplicit ? adultStoryLibraryInstruction(config.brief) : ""}\n${storyArcInstruction(config)}\n${timingInstruction(config)}\n${identity}\n${continuity}\n先完成剧本，再从完整剧本整理唯一角色和场景资产，最后按本子中的因果和卡点拆分镜头；同一人的称呼、衣着或姿势变化不能拆成新角色，别名统一归入同一 ID。每镜最多 3 人，必须仅引用资产表中实际出场的角色 ID 和一个场景 ID。每镜填写 storyBeat、shotPurpose、timingReason、framing、characterLayout、cameraId 和 atomicAction；atomicAction 只允许一个主要动作，每镜最多再带一个服装、位置或道具状态转移，超过就必须拆镜。cameraId 标识可共享空间轴线的机位，parentShotId 只引用同机位此前已存在的父镜头。timingReason 必须根据对白字数、动作拍数量和状态变化解释 endSecond-startSecond。characterLayout 必须与 characterIds 完全相同且每人绑定不同的 leftThird / centerThird / rightThird 竖屏区域，写明位置、姿势、朝向与视线。\nassets 的 description 写固定外观和服装或场景布局，imagePrompt 写资产图构图与光照。shots 的 imagePrompt 写本镜第一帧静态构图；videoPrompt 必须按本镜实际时长（endSecond-startSecond）逐段写从 startState 到 endState 的连续动作、运镜、节奏和声音。脱衣、转身、换位、进入、退出等复杂状态变化必须完整显示或拆成独立过渡镜，不能在镜外突然完成。不要把未出场角色、拼贴、字幕或提示词文字画进图。台词只写入 dialogue。\n只输出符合下列 JSON Schema 的一个 JSON 对象，不加代码围栏或解释：\n${JSON.stringify(z.toJSONSchema(originalPlanSchema))}`;
+  const compactPrompt = `你是成人剧情短片编剧。只做剧情与镜头决策，服务器会在本地补全时间轴、资产提示词和严格连续性合同。\n创作需求：${config.brief}\n视觉风格：${config.style || "电影写实"}\n必须恰好返回 ${config.characterCount} 名原创虚构、明确30岁以上、清醒知情且自愿的成年人，以及 ${config.shotCount} 个连续镜头、一个固定场景。人物描述必须包含不可变脸型、五官、发型发色、肤色、身高体型、身体比例和唯一标记。剧情采用 setup → consent → explicitAction → escalation → climax → aftermath：开头快速建立秘密、风险和主动选择；前8秒内完成明确同意并进入首次成人动作；中段升级；结尾必须有关系决定。每个 shot 必须用 atomicAction 写唯一主要动作，最多再包含一个位置、服装或道具状态转移；走位、脱衣、换姿势、取道具和主要成人动作不能全部塞进同一镜头，超过上限必须拆镜。动作镜要明确写出真实性交、插入关系、无遮挡生殖器细节、由人物骨盆整体运动产生的往复以及正确人体连接，不能只写亲吻、拥抱、躺床或镜外暗示；禁止器官自身伸缩、悬浮、错误孔位、重复器官、融合与穿模。严格只有指定角色，不出现第三人。每个 shot 的 startState/endState 都写人物位置、朝向、姿势、衣物状态、手脚、手机、床铺与光线；动作和台词要有因果，不能是同一画面的同义重复。\n${adultStoryLibraryInstruction(config.brief)}\n只输出一个精炼 JSON 对象，不加代码围栏或解释：\n${JSON.stringify(z.toJSONSchema(compactAdultPlanSchema))}`;
   const prompt = config.adultExplicit ? compactPrompt : fullPrompt;
   state.tasks[0]!.prompt = prompt;
   await write(cwd, `${runDirectory(state)}/languagePrompt.txt`, prompt);
@@ -482,6 +501,7 @@ async function planStory(cwd: string, state: OriginalRun) {
     : originalPlanSchema.parse(fillMissingShotPrompts(parsed, config));
   normalizeShortTimeline(plan, config);
   reinforceAdultSingleShot(plan, config);
+  normalizeShotContracts(plan);
   validatePlan(plan, config);
   await write(cwd, `${runDirectory(state)}/plan.json`, JSON.stringify(plan, null, 2));
   state.jsonFiles = [...(config.adultExplicit ? [`${runDirectory(state)}/adultStoryLibrary.json`] : []), `${runDirectory(state)}/plan.json`];
@@ -615,6 +635,9 @@ async function planLongScene(cwd: string, state: OriginalRun, task: OriginalTask
   for (const [index, shot] of plan.shots.entries()) {
     shot.startSecond = (startShot + index) * state.config.duration;
     shot.endSecond = shot.startSecond + state.config.duration;
+    shot.cameraId ||= `camera${sceneIndex + 1}`;
+    shot.atomicAction ||= shot.shotPurpose || shot.action.split(/[。；]/)[0] || shot.action;
+    if (!shot.parentShotId && index > 0 && plan.shots[index - 1]!.cameraId === shot.cameraId) shot.parentShotId = plan.shots[index - 1]!.id;
   }
   plan.shots[0]!.startState = previous?.shots.at(-1)?.endState ?? scene.startState;
   for (let index = 1; index < plan.shots.length; index++) plan.shots[index]!.startState = plan.shots[index - 1]!.endState;
@@ -627,6 +650,7 @@ async function planLongScene(cwd: string, state: OriginalRun, task: OriginalTask
   state.jsonFiles = [...new Set([...(state.jsonFiles ?? []), `${runDirectory(state)}/scenes/${scene.id}.json`])];
   if (Object.keys(scenePlans).length !== bible.scenes.length) return;
   const complete = composeLongPlan(bible, scenePlans);
+  normalizeShotContracts(complete);
   validatePlan(complete, state.config);
   state.plan = complete;
   await write(cwd, `${runDirectory(state)}/plan.json`, JSON.stringify(complete, null, 2));
@@ -648,7 +672,8 @@ async function inspectFaces(cwd: string, state: OriginalRun, task: OriginalTask)
   for (const id of assetIds) {
     const asset = state.tasks.find(item => item.id === id && item.kind === "asset") ?? fail(`质检任务缺少角色资产：${id}`);
     const file = asset.files?.[0] ?? fail(`角色资产尚未完成：${id}`);
-    references.push({ id: id.slice("asset:".length), path: (await resolveWorkspacePath(cwd, file.path)).path });
+    const characterId = id.startsWith("assetVariant:") ? id.split(":")[1]! : id.slice("asset:".length);
+    references.push({ id: characterId, path: (await resolveWorkspacePath(cwd, file.path)).path });
   }
   const result = await inspectVideoFaces(videoPath, references, state.config.faceThreshold);
   task.qa = result;
@@ -820,7 +845,7 @@ function workflowResult(state: OriginalRun, stage: typeof workflowStages[number]
   if (!plan) return "当前阶段尚未产生结构化结果。";
   if (stage === "story") return `# ${plan.title}\n\n${plan.synopsis}`;
   if (stage === "script") return `# ${plan.title}\n\n${plan.script}`;
-  if (stage === "storyboard") return plan.shots.map((shot, index) => `### ${index + 1}. ${shot.title}\n\n时间：${shot.startSecond}-${shot.endSecond}s（${shotDuration(shot)}s）\n\n剧情卡点：${shot.storyBeat} · ${shot.shotPurpose}\n\n时长判断：${shot.timingReason || "固定镜长"}\n\n起始状态：${shot.startState || "未记录"}\n\n结束状态：${shot.endState || "未记录"}\n\n生图提示词：${shot.imagePrompt}\n\n视频提示词：${shot.videoPrompt}`).join("\n\n");
+  if (stage === "storyboard") return plan.shots.map((shot, index) => `### ${index + 1}. ${shot.title}\n\n时间：${shot.startSecond}-${shot.endSecond}s（${shotDuration(shot)}s）\n\n剧情卡点：${shot.storyBeat} · ${shot.shotPurpose}\n\n机位树：${shot.cameraId || "未记录"}${shot.parentShotId ? ` ← ${shot.parentShotId}` : "（根镜头）"}\n\n原子动作：${shot.atomicAction || shot.action}\n\n时长判断：${shot.timingReason || "固定镜长"}\n\n起始状态：${shot.startState || "未记录"}\n\n结束状态：${shot.endState || "未记录"}\n\n生图提示词：${shot.imagePrompt}\n\n视频提示词：${shot.videoPrompt}`).join("\n\n");
   return "本阶段的媒体结果、提示词与错误记录如下。";
 }
 
@@ -881,7 +906,7 @@ async function publishCompleted(cwd: string, state: OriginalRun) {
   if (!plan) return;
   await publishCanvas(cwd, state, "story", "故事方案", `# ${plan.title}\n\n${plan.synopsis}`);
   await publishCanvas(cwd, state, "script", "完整剧本", `# ${plan.title}\n\n${plan.script}`);
-  await publishCanvas(cwd, state, "storyboard", "导演分镜", plan.shots.map((shot, index) => `## ${index + 1}. ${shot.title}\n\n绝对时间：${shot.startSecond}-${shot.endSecond}s · 本镜 ${shotDuration(shot)}s · 剧情节拍：${shot.storyBeat} · 镜头目的：${shot.shotPurpose}\n\n时长判断：${shot.timingReason || "固定镜长"}\n\n场景：${shot.sceneId} · 角色：${shot.characterIds.join("、") || "空镜"} · 景别：${shot.framing}\n\n人物区域：${shot.characterLayout?.map(item => `${item.characterId}=${item.screenRegion}`).join("、") || "空镜"}\n\n开始状态：${shot.startState || "未单独记录"}\n\n结束状态：${shot.endState || "未单独记录"}\n\n衔接说明：${shot.continuity || (index === 0 ? "全片开场" : "按剧本承接")}\n\n${shot.action}\n\n对白：${shot.dialogue}\n\n生图提示词：${shot.imagePrompt}\n\n视频提示词：${shot.videoPrompt}`).join("\n\n"));
+  await publishCanvas(cwd, state, "storyboard", "导演分镜", plan.shots.map((shot, index) => `## ${index + 1}. ${shot.title}\n\n绝对时间：${shot.startSecond}-${shot.endSecond}s · 本镜 ${shotDuration(shot)}s · 剧情节拍：${shot.storyBeat} · 镜头目的：${shot.shotPurpose}\n\n机位树：${shot.cameraId || "未记录"}${shot.parentShotId ? ` ← ${shot.parentShotId}` : "（根镜头）"} · 原子动作：${shot.atomicAction || shot.action}\n\n时长判断：${shot.timingReason || "固定镜长"}\n\n场景：${shot.sceneId} · 角色：${shot.characterIds.join("、") || "空镜"} · 景别：${shot.framing}\n\n人物区域：${shot.characterLayout?.map(item => `${item.characterId}=${item.screenRegion}`).join("、") || "空镜"}\n\n开始状态：${shot.startState || "未单独记录"}\n\n结束状态：${shot.endState || "未单独记录"}\n\n衔接说明：${shot.continuity || (index === 0 ? "全片开场" : "按剧本承接")}\n\n${shot.action}\n\n对白：${shot.dialogue}\n\n生图提示词：${shot.imagePrompt}\n\n视频提示词：${shot.videoPrompt}`).join("\n\n"));
   for (const [kind, stage, title] of [["asset", "assets", "人物与场景资产"], ["image", "images", "分镜图"], ["video", "videos", "镜头视频"], ["export", "export", "最终视频"]] as const) {
     const tasks = state.tasks.filter(task => task.kind === kind);
     if (tasks.length && tasks.every(task => task.status === "completed")) await publishCanvas(cwd, state, stage, title, tasks.map(task => `## ${task.label}\n\n${task.prompt || "按镜头顺序合成"}\n\n参考任务：${task.references?.join("、") || "无"}\n\n${task.files?.map(file => `素材：${file.path}`).join("\n") || ""}`).join("\n\n"), tasks);
@@ -1080,7 +1105,8 @@ async function runTask(cwd: string, control: Control, models: Awaited<ReturnType
     } else {
       if (task.kind === "asset") {
         const asset = state.plan?.assets.find(item => task.id === `asset:${item.id}`);
-        if (asset?.kind === "character") request.ratio = "16:9";
+        if (asset?.kind === "character") request.ratio = "9:16";
+        else if (task.id.startsWith("assetVariant:")) request.ratio = mediaModel.imageRatios?.includes("1:1") ? "1:1" : config.ratio;
       }
       request.size = mediaModel.imageSizes?.[0];
       if (references.length) request.images = references.map(file => ({ path: file.path, mimeType: file.mimeType }));
@@ -1230,6 +1256,7 @@ export async function start(cwd: string, id: string, config: OriginalConfig, pre
     const models = await preflight(config);
     if (reusePlan) {
       normalizeShortTimeline(reusePlan, config);
+      normalizeShotContracts(reusePlan);
       validatePlan(reusePlan, config);
     }
     const initialTask: OriginalTask = config.productionMode === "long"

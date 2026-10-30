@@ -18,6 +18,7 @@ export const originalConfigSchema = z.strictObject({
   ratio: z.enum(["16:9", "9:16", "1:1"]),
   duration: z.number().int().positive().max(60),
   resolution: z.string().min(1).max(64),
+  qualityTier: z.enum(["draft", "final"]).default("draft"),
   stitch: z.boolean(),
   adultExplicit: z.boolean().default(false),
   characterLock: z.boolean().default(true),
@@ -43,6 +44,8 @@ export const originalPlanSchema = z.strictObject({
     startSecond: z.number().finite().nonnegative().optional(), endSecond: z.number().finite().positive().optional(),
     storyBeat: z.enum(["setup", "consent", "escalation", "explicitAction", "climax", "aftermath"]).optional(),
     shotPurpose: z.string().trim().min(1).max(2000).optional(), timingReason: z.string().trim().min(1).max(2000).optional(),
+    cameraId: identifier.optional(), parentShotId: identifier.optional(),
+    atomicAction: z.string().trim().min(1).max(2000).optional(),
     framing: z.string().trim().min(1).max(1000).optional(),
     characterLayout: z.array(z.strictObject({
       characterId: identifier, screenRegion: z.enum(["leftThird", "centerThird", "rightThird"]),
