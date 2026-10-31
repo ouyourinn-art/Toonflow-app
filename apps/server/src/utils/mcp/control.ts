@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { Request, Response } from "express";
 import { z } from "zod";
 import conf from "@/utils/conf";
@@ -21,6 +21,11 @@ type ControlResult = { result?: unknown; error?: string };
 type Connection = { id: string; state: ControlState; revision: number; response: Response; pending?: { id: string; finish(result: ControlResult): void } };
 // ACT: 控制连接只属于当前单进程，重连重新注册，不持久化运行中的命令。
 const connections = new Map<string, Connection>();
+const internalMcpToken = randomBytes(32).toString("hex");
+
+export function getInternalMcpToken() {
+  return internalMcpToken;
+}
 
 export function getMcpSettings() {
   const value = conf.get("settings", {}).mcp as { enabled?: unknown; token?: unknown; port?: unknown } | undefined;
@@ -47,13 +52,15 @@ export function getAppOrigin(req: Request) {
 
 export function authorizeMcp(req: Request) {
   const { enabled, token } = getMcpSettings();
-  if (!enabled || token.length < 32 || !allowedHost(req)) return false;
+  if (!allowedHost(req)) return false;
   const actual = Buffer.from(req.get("authorization") ?? "");
-  const expected = Buffer.from(`Bearer ${token}`);
   if (req.get("origin")) {
     try { getAppOrigin(req); } catch { return false; }
   }
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
+  return [internalMcpToken, ...(enabled && token.length >= 32 ? [token] : [])].some(candidate => {
+    const expected = Buffer.from(`Bearer ${candidate}`);
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
+  });
 }
 
 export function assertAppRequest(req: Request) {

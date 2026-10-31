@@ -7,7 +7,7 @@ import { dirname, resolve } from "node:path";
 import type { Socket } from "node:net";
 import type { Express } from "express";
 import conf from "@/utils/conf";
-import { getMcpSettings } from "@/utils/mcp/control";
+import { getInternalMcpToken, getMcpSettings } from "@/utils/mcp/control";
 import { closeMcpServers } from "@/utils/mcp/servers";
 
 let runtime: { app: Express; appOrigin: string; requestHeaders: Record<string, string>; server?: Server; sockets?: Set<Socket>; url?: string; port?: number; preferredPort?: number; file?: string; command: string; entry: string; error?: { cause: unknown; keepAddress: boolean } } | undefined;
@@ -123,6 +123,15 @@ export function getMcpRuntime() {
     stdio: runtime?.file && existsSync(runtime.entry)
       ? { command: runtime.command, args: [runtime.entry, "--runtime", runtime.file] }
       : null,
+  };
+}
+
+export function getCodexMcpRuntime() {
+  if (!runtime?.url || !existsSync(runtime.entry)) return null;
+  return {
+    command: runtime.command,
+    args: [runtime.entry, "--url", runtime.url],
+    env: { TOONFLOW_MCP_TOKEN: getInternalMcpToken() },
   };
 }
 

@@ -33,8 +33,10 @@ import * as personalization from "@/utils/personalization";
 import * as mentionFiles from "@/agent/mentionFiles";
 import * as network from "@/utils/network";
 import * as original from "@/utils/original";
+import * as codex from "@/utils/codex";
 
 export default {
+  codex,
   original,
   assets,
   browser,

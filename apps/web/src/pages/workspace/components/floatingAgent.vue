@@ -27,8 +27,9 @@
         tabindex="0"
         @pointerdown.stop="startInteraction($event, handle.edge)"
         @keydown="resizeWithKeyboard($event, handle.edge)" />
-      <agent v-model="visible">
+      <agent v-show="mode === 'builtin'" v-model="visible">
         <template #menuActions>
+          <el-button text title="切换到 Codex 画布代理" @click="mode = 'codex'">Codex</el-button>
           <el-button
             text
             circle
@@ -40,6 +41,20 @@
           </el-button>
         </template>
       </agent>
+      <codexAgent v-show="mode === 'codex'" @close="visible = false">
+        <template #mode><el-button text title="切换到内置 Agent" @click="mode = 'builtin'">内置 Agent</el-button></template>
+        <template #actions>
+          <el-button
+            text
+            circle
+            :aria-label="docked ? '切换为悬浮' : '停靠到右侧'"
+            :title="docked ? '切换为悬浮' : '停靠到右侧'"
+            @click="docked = !docked">
+            <icon-app-window-bottom-right v-if="docked" :size="17" aria-hidden="true" />
+            <icon-layout-sidebar-right v-else :size="17" aria-hidden="true" />
+          </el-button>
+        </template>
+      </codexAgent>
     </aside>
   </teleport>
 </template>
@@ -48,10 +63,12 @@
 import { computed, onBeforeUnmount, reactive, ref, shallowRef, watch } from "vue";
 import { IconLayoutSidebarRight, IconAppWindowBottomRight } from "@tabler/icons-vue";
 import agent from "@/components/agent/index.vue";
+import codexAgent from "./codexAgent.vue";
 
 const visible = defineModel<boolean>({ default: false });
 const emit = defineEmits<{ resize: [width: number] }>();
 const docked = ref(false);
+const mode = ref<"builtin" | "codex">("builtin");
 const viewport = reactive({ width: window.innerWidth, height: window.innerHeight });
 const gap = computed(() => Math.min(15, viewport.width / 2, viewport.height / 2));
 const maxWidth = computed(() => Math.max(0, docked.value ? viewport.width * 0.45 : viewport.width - gap.value * 2));
